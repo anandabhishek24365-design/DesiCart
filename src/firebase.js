@@ -9,6 +9,19 @@ import {
   updateProfile,
   signOut
 } from 'firebase/auth';
+import {
+  getFirestore,
+  collection,
+  doc,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  getDocs,
+  onSnapshot,
+  serverTimestamp,
+  query,
+  orderBy
+} from 'firebase/firestore';
 
 // DesiCart Firebase Project Configuration
 const firebaseConfig = {
@@ -29,6 +42,9 @@ const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const auth = getAuth(app);
 auth.languageCode = 'en';
 
+// Firestore database instance
+const db = getFirestore(app);
+
 // Google Auth Provider
 const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
@@ -38,6 +54,7 @@ const isFirebaseEnabled = true;
 export {
   app,
   auth,
+  db,
   googleProvider,
   isFirebaseEnabled,
   GoogleAuthProvider,
@@ -46,5 +63,16 @@ export {
   createUserWithEmailAndPassword,
   sendPasswordResetEmail,
   updateProfile,
-  signOut
+  signOut,
+  // Firestore helpers
+  collection,
+  doc,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  getDocs,
+  onSnapshot,
+  serverTimestamp,
+  query,
+  orderBy
 };

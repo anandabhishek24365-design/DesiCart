@@ -5,8 +5,12 @@ import {
   INITIAL_COUPONS,
   INITIAL_DELIVERY_PARTNERS
 } from '../data/initialData';
-import { auth, isFirebaseEnabled } from '../firebase';
+import {
+  auth, db, isFirebaseEnabled,
+  collection, doc, setDoc, updateDoc, deleteDoc, getDocs, onSnapshot, query, orderBy, serverTimestamp
+} from '../firebase';
 import { onAuthStateChanged } from 'firebase/auth';
+
 
 export const AppContext = createContext();
 
@@ -274,6 +278,81 @@ export const AppProvider = ({ children }) => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // stable — uses refs for vendors/deliveryPartners
 
+  // ─── FIRESTORE REAL-TIME LISTENERS ──────────────────────────────────────────
+  // These replace the localStorage seeds for key shared collections.
+  // onSnapshot keeps state in sync across browsers in real time.
+  useEffect(() => {
+    if (!isFirebaseEnabled || !db) return;
+
+    // ── vendors ──
+    const unsubVendors = onSnapshot(collection(db, 'vendors'), (snap) => {
+      if (snap.empty) {
+        // First launch: seed Firestore from INITIAL_VENDORS
+        INITIAL_VENDORS.forEach((v) => setDoc(doc(db, 'vendors', v.id), v).catch(console.error));
+      } else {
+        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setVendors(data);
+        vendorsRef.current = data;
+        localStorage.setItem('delivery_platform_vendors', JSON.stringify(data));
+      }
+    }, (err) => console.error('Firestore vendors listener error:', err));
+
+    // ── riders ──
+    const unsubRiders = onSnapshot(collection(db, 'riders'), (snap) => {
+      if (snap.empty) {
+        INITIAL_DELIVERY_PARTNERS.forEach((r) => setDoc(doc(db, 'riders', r.id), r).catch(console.error));
+      } else {
+        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setDeliveryPartners(data);
+        deliveryPartnersRef.current = data;
+        localStorage.setItem('delivery_platform_delivery_partners', JSON.stringify(data));
+      }
+    }, (err) => console.error('Firestore riders listener error:', err));
+
+    // ── admins ──
+    const DEFAULT_ADMIN = { email: 'testadmin24365@gmail.com', name: 'Test Administrator', status: 'active', createdAt: new Date().toISOString() };
+    const unsubAdmins = onSnapshot(collection(db, 'admins'), (snap) => {
+      if (snap.empty) {
+        // Seed default admin on first launch
+        const docId = DEFAULT_ADMIN.email.replace(/[.@]/g, '_');
+        setDoc(doc(db, 'admins', docId), DEFAULT_ADMIN).catch(console.error);
+      } else {
+        const data = snap.docs.map((d) => ({ ...d.data() }));
+        setAdmins(data);
+        localStorage.setItem('delivery_platform_admins', JSON.stringify(data));
+      }
+    }, (err) => console.error('Firestore admins listener error:', err));
+
+
+    // ── platform settings ──
+    const unsubSettings = onSnapshot(doc(db, 'settings', 'platform'), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        setPlatformSettings(data);
+        localStorage.setItem('delivery_platform_settings', JSON.stringify(data));
+      }
+    }, (err) => console.error('Firestore settings listener error:', err));
+
+    // ── activity log (latest 200 entries) ──
+    const logQ = query(collection(db, 'activityLog'), orderBy('timestamp', 'desc'));
+    const unsubLog = onSnapshot(logQ, (snap) => {
+      if (!snap.empty) {
+        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setActivityLog(data);
+        localStorage.setItem('delivery_platform_activity_log', JSON.stringify(data));
+      }
+    }, (err) => console.error('Firestore activityLog listener error:', err));
+
+    return () => {
+      unsubVendors();
+      unsubRiders();
+      unsubAdmins();
+      unsubSettings();
+      unsubLog();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Sync to LocalStorage
   useEffect(() => {
     localStorage.setItem('delivery_platform_role', activeRole);
@@ -421,6 +500,12 @@ export const AppProvider = ({ children }) => {
     setVendors(prev => [...prev, newVendor]);
     setCurrentVendorId(newVendor.id);
     setAdminNewRegistrationsCount(c => c + 1);
+    // Persist to Firestore
+    if (isFirebaseEnabled && db) {
+      setDoc(doc(db, 'vendors', newVendor.id), newVendor).catch((err) =>
+        console.error('Firestore vendor write error:', err)
+      );
+    }
     showToast('Store registration submitted! Awaiting Admin approval.', 'info');
     return true;
   };
@@ -468,6 +553,12 @@ export const AppProvider = ({ children }) => {
     setDeliveryPartners(prev => [...prev, newRider]);
     setCurrentRiderId(newRider.id);
     setAdminNewRegistrationsCount(c => c + 1);
+    // Persist to Firestore
+    if (isFirebaseEnabled && db) {
+      setDoc(doc(db, 'riders', newRider.id), newRider).catch((err) =>
+        console.error('Firestore rider write error:', err)
+      );
+    }
     showToast('Rider registration submitted! Awaiting Admin approval.', 'info');
     return true;
   };
@@ -475,15 +566,15 @@ export const AppProvider = ({ children }) => {
   /** Admin: approve a vendor or rider registration */
   const adminApproveRegistration = (type, id) => {
     if (type === 'vendor') {
-      setVendors(prev => prev.map(v =>
-        v.id === id ? { ...v, registrationStatus: 'approved', isApproved: true, rejectionReason: null } : v
-      ));
+      const update = { registrationStatus: 'approved', isApproved: true, rejectionReason: null };
+      setVendors(prev => prev.map(v => v.id === id ? { ...v, ...update } : v));
+      if (isFirebaseEnabled && db) updateDoc(doc(db, 'vendors', id), update).catch(console.error);
       showToast('Store account approved successfully!', 'success');
       logActivity('Approve Registration', `Approved Store registration for ID: ${id}`);
     } else {
-      setDeliveryPartners(prev => prev.map(d =>
-        d.id === id ? { ...d, registrationStatus: 'approved', status: 'online', rejectionReason: null } : d
-      ));
+      const update = { registrationStatus: 'approved', status: 'online', rejectionReason: null };
+      setDeliveryPartners(prev => prev.map(d => d.id === id ? { ...d, ...update } : d));
+      if (isFirebaseEnabled && db) updateDoc(doc(db, 'riders', id), update).catch(console.error);
       showToast('Rider account approved successfully!', 'success');
       logActivity('Approve Registration', `Approved Rider registration for ID: ${id}`);
     }
@@ -492,16 +583,17 @@ export const AppProvider = ({ children }) => {
 
   /** Admin: reject a vendor or rider registration with a reason */
   const adminRejectRegistration = (type, id, reason) => {
+    const rejReason = reason || 'Application did not meet requirements.';
     if (type === 'vendor') {
-      setVendors(prev => prev.map(v =>
-        v.id === id ? { ...v, registrationStatus: 'rejected', isApproved: false, rejectionReason: reason || 'Application did not meet requirements.' } : v
-      ));
-      logActivity('Reject Registration', `Rejected Store registration for ID: ${id}. Reason: ${reason}`);
+      const update = { registrationStatus: 'rejected', isApproved: false, rejectionReason: rejReason };
+      setVendors(prev => prev.map(v => v.id === id ? { ...v, ...update } : v));
+      if (isFirebaseEnabled && db) updateDoc(doc(db, 'vendors', id), update).catch(console.error);
+      logActivity('Reject Registration', `Rejected Store registration for ID: ${id}. Reason: ${rejReason}`);
     } else {
-      setDeliveryPartners(prev => prev.map(d =>
-        d.id === id ? { ...d, registrationStatus: 'rejected', rejectionReason: reason || 'Application did not meet requirements.' } : d
-      ));
-      logActivity('Reject Registration', `Rejected Rider registration for ID: ${id}. Reason: ${reason}`);
+      const update = { registrationStatus: 'rejected', rejectionReason: rejReason };
+      setDeliveryPartners(prev => prev.map(d => d.id === id ? { ...d, ...update } : d));
+      if (isFirebaseEnabled && db) updateDoc(doc(db, 'riders', id), update).catch(console.error);
+      logActivity('Reject Registration', `Rejected Rider registration for ID: ${id}. Reason: ${rejReason}`);
     }
     setAdminNewRegistrationsCount(c => Math.max(0, c - 1));
     showToast('Registration rejected.', 'warning');
@@ -510,14 +602,14 @@ export const AppProvider = ({ children }) => {
   /** Admin: suspend an approved vendor or rider */
   const adminSuspendAccount = (type, id) => {
     if (type === 'vendor') {
-      setVendors(prev => prev.map(v =>
-        v.id === id ? { ...v, registrationStatus: 'suspended', isApproved: false } : v
-      ));
+      const update = { registrationStatus: 'suspended', isApproved: false };
+      setVendors(prev => prev.map(v => v.id === id ? { ...v, ...update } : v));
+      if (isFirebaseEnabled && db) updateDoc(doc(db, 'vendors', id), update).catch(console.error);
       logActivity('Suspend Account', `Suspended Store account for ID: ${id}`);
     } else {
-      setDeliveryPartners(prev => prev.map(d =>
-        d.id === id ? { ...d, registrationStatus: 'suspended', status: 'offline' } : d
-      ));
+      const update = { registrationStatus: 'suspended', status: 'offline' };
+      setDeliveryPartners(prev => prev.map(d => d.id === id ? { ...d, ...update } : d));
+      if (isFirebaseEnabled && db) updateDoc(doc(db, 'riders', id), update).catch(console.error);
       logActivity('Suspend Account', `Suspended Rider account for ID: ${id}`);
     }
     showToast('Account suspended.', 'warning');
@@ -526,14 +618,14 @@ export const AppProvider = ({ children }) => {
   /** Admin: reactivate a suspended vendor or rider */
   const adminReactivateAccount = (type, id) => {
     if (type === 'vendor') {
-      setVendors(prev => prev.map(v =>
-        v.id === id ? { ...v, registrationStatus: 'approved', isApproved: true } : v
-      ));
+      const update = { registrationStatus: 'approved', isApproved: true };
+      setVendors(prev => prev.map(v => v.id === id ? { ...v, ...update } : v));
+      if (isFirebaseEnabled && db) updateDoc(doc(db, 'vendors', id), update).catch(console.error);
       logActivity('Reactivate Account', `Reactivated Store account for ID: ${id}`);
     } else {
-      setDeliveryPartners(prev => prev.map(d =>
-        d.id === id ? { ...d, registrationStatus: 'approved', status: 'online' } : d
-      ));
+      const update = { registrationStatus: 'approved', status: 'online' };
+      setDeliveryPartners(prev => prev.map(d => d.id === id ? { ...d, ...update } : d));
+      if (isFirebaseEnabled && db) updateDoc(doc(db, 'riders', id), update).catch(console.error);
       logActivity('Reactivate Account', `Reactivated Rider account for ID: ${id}`);
     }
     showToast('Account reactivated successfully!', 'success');
@@ -546,8 +638,10 @@ export const AppProvider = ({ children }) => {
   const clearRejectedRegistration = (type, id) => {
     if (type === 'vendor') {
       setVendors(prev => prev.filter(v => v.id !== id));
+      if (isFirebaseEnabled && db) deleteDoc(doc(db, 'vendors', id)).catch(console.error);
     } else {
       setDeliveryPartners(prev => prev.filter(d => d.id !== id));
+      if (isFirebaseEnabled && db) deleteDoc(doc(db, 'riders', id)).catch(console.error);
     }
   };
 
@@ -966,7 +1060,7 @@ export const AppProvider = ({ children }) => {
     logActivity('Delete Coupon', `Deleted coupon: ${code}`);
   };
 
-  // Activity Log
+  // Activity Log — persisted to Firestore
   const logActivity = (action, details) => {
     const newLog = {
       id: 'log_' + Date.now() + Math.random().toString(36).substr(2, 5),
@@ -977,6 +1071,10 @@ export const AppProvider = ({ children }) => {
       details
     };
     setActivityLog((prev) => [newLog, ...prev]);
+    // Persist to Firestore
+    if (isFirebaseEnabled && db) {
+      setDoc(doc(db, 'activityLog', newLog.id), newLog).catch(console.error);
+    }
   };
 
   // Super Admin functions
@@ -996,6 +1094,11 @@ export const AppProvider = ({ children }) => {
       createdAt: new Date().toISOString()
     };
     setAdmins(prev => [...prev, newAdmin]);
+    // Persist to Firestore (use email as doc ID, replacing @ and . for valid doc IDs)
+    if (isFirebaseEnabled && db) {
+      const docId = email.toLowerCase().replace(/[.@]/g, '_');
+      setDoc(doc(db, 'admins', docId), newAdmin).catch(console.error);
+    }
     logActivity('Create Admin', `Created Admin account for ${email} (${name})`);
     showToast(`Admin ${email} created successfully!`, 'success');
     return true;
@@ -1005,6 +1108,11 @@ export const AppProvider = ({ children }) => {
     setAdmins(prev => prev.map(a => {
       if (a.email.toLowerCase() === email.toLowerCase()) {
         const newStatus = a.status === 'active' ? 'inactive' : 'active';
+        // Persist to Firestore
+        if (isFirebaseEnabled && db) {
+          const docId = email.toLowerCase().replace(/[.@]/g, '_');
+          updateDoc(doc(db, 'admins', docId), { status: newStatus }).catch(console.error);
+        }
         logActivity('Toggle Admin Status', `Changed Admin status for ${email} to ${newStatus}`);
         showToast(`Admin status changed to ${newStatus}`, 'info');
         return { ...a, status: newStatus };
@@ -1015,12 +1123,21 @@ export const AppProvider = ({ children }) => {
 
   const deleteAdminAccount = (email) => {
     setAdmins(prev => prev.filter(a => a.email.toLowerCase() !== email.toLowerCase()));
+    // Persist to Firestore
+    if (isFirebaseEnabled && db) {
+      const docId = email.toLowerCase().replace(/[.@]/g, '_');
+      deleteDoc(doc(db, 'admins', docId)).catch(console.error);
+    }
     logActivity('Remove Admin', `Deleted Admin account for ${email}`);
     showToast(`Admin ${email} removed.`, 'warning');
   };
 
   const updatePlatformSettings = (settings) => {
     setPlatformSettings(settings);
+    // Persist to Firestore
+    if (isFirebaseEnabled && db) {
+      setDoc(doc(db, 'settings', 'platform'), settings).catch(console.error);
+    }
     logActivity('Update Platform Settings', `Settings updated: Commission ${settings.commissionRate}%, Base Pay ₹${settings.baseDeliveryPay}, Maint. Mode: ${settings.maintenanceMode}`);
     showToast('Platform settings updated successfully!', 'success');
   };
