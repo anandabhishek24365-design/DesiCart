@@ -25,7 +25,10 @@ export const DeliveryDashboard = () => {
     globalCoords,
     isGpsActive,
     requestGlobalGPS,
-    globalAddress
+    globalAddress,
+    updateRiderProfile,
+    toggleRiderStatus,
+    showToast
   } = useContext(AppContext);
 
   // Active sub tab state
@@ -47,10 +50,7 @@ export const DeliveryDashboard = () => {
 
   // Toggle rider availability status
   const handleToggleStatus = () => {
-    // Modify status inside context state (rider online/offline)
-    // For simplicity, we can do this using a local state or sync if we add action to AppContext
-    // In our context, deliveryPartners is a state, we can toggle it here:
-    // Actually let's mock it inside AppContext or handle locally in standard ways
+    toggleRiderStatus(currentRiderId);
   };
 
   return (
@@ -94,6 +94,12 @@ export const DeliveryDashboard = () => {
               className={`btn btn-sm ${activeTab === 'earnings' ? 'btn-primary' : 'btn-secondary'}`}
             >
               Earnings
+            </button>
+            <button
+              onClick={() => setActiveTab('profile')}
+              className={`btn btn-sm ${activeTab === 'profile' ? 'btn-primary' : 'btn-secondary'}`}
+            >
+              Profile
             </button>
             <button
               onClick={logout}
@@ -179,16 +185,54 @@ export const DeliveryDashboard = () => {
                   ))}
                 </div>
 
+                {/* Navigation Routing Steps */}
+                <div style={{ padding: '0.75rem', border: '1px dashed var(--neutral-border)', borderRadius: 'var(--radius-lg)', backgroundColor: 'var(--neutral-white)', marginTop: '0.5rem' }}>
+                  <h4 style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--neutral-text)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                    <Navigation size={14} style={{ color: 'var(--accent-orange)' }} />
+                    <span>Navigation Routing & Steps</span>
+                  </h4>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', fontSize: '0.75rem', color: 'var(--neutral-muted)' }}>
+                    <div style={{ display: 'flex', gap: '0.4rem' }}>
+                      <span style={{ color: 'var(--primary-green)' }}>📍</span>
+                      <span><strong>Step 1:</strong> Start from your GPS location. Travel 0.4 km towards <strong>{activeOrder.vendorName}</strong>.</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.4rem' }}>
+                      <span style={{ color: 'var(--accent-orange)' }}>🏬</span>
+                      <span><strong>Step 2:</strong> Arrive at pickup store and collect order package.</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.4rem' }}>
+                      <span style={{ color: 'var(--primary-green)' }}>🛣️</span>
+                      <span><strong>Step 3:</strong> Proceed south on main highway for 1.8 km towards <strong>{activeOrder.address.split(',')[0]}</strong>.</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.4rem' }}>
+                      <span style={{ color: 'var(--accent-orange)' }}>🏠</span>
+                      <span><strong>Step 4:</strong> Reach customer drop destination, verify cash/payment, and hand over package.</span>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Dispatch Progress Controls */}
                 <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                   {activeOrder.status === 'ready' ? (
-                    <button
-                      onClick={() => updateOrderStatus(activeOrder.id, 'out_for_delivery', currentRiderId)}
-                      className="btn btn-orange"
-                      style={{ width: '100%' }}
-                    >
-                      Confirm Order Picked Up
-                    </button>
+                    <>
+                      <button
+                        onClick={() => updateOrderStatus(activeOrder.id, 'out_for_delivery', currentRiderId)}
+                        className="btn btn-orange"
+                        style={{ width: '100%' }}
+                      >
+                        Confirm Order Picked Up
+                      </button>
+                      <button
+                        onClick={() => {
+                          updateOrderStatus(activeOrder.id, 'ready', null);
+                          showToast('Delivery request declined/rejected.', 'warning');
+                        }}
+                        className="btn btn-secondary"
+                        style={{ width: '100%', color: '#ef4444', borderColor: '#fca5a5' }}
+                      >
+                        Reject Delivery Request
+                      </button>
+                    </>
                   ) : (
                     <button
                       onClick={() => updateOrderStatus(activeOrder.id, 'delivered', currentRiderId)}
@@ -307,6 +351,139 @@ export const DeliveryDashboard = () => {
           </div>
         </div>
       )}
+
+      {/* SUB-VIEW 3: PROFILE & VEHICLE */}
+      {activeTab === 'profile' && (
+        <RiderProfileView
+          currentRider={currentRider}
+          currentRiderId={currentRiderId}
+          updateRiderProfile={updateRiderProfile}
+          toggleRiderStatus={toggleRiderStatus}
+        />
+      )}
+    </div>
+  );
+};
+
+/* ─── Premium Rider Profile Component ─── */
+const RiderProfileView = ({ currentRider, currentRiderId, updateRiderProfile, toggleRiderStatus }) => {
+  const [name, setName] = useState(currentRider?.name || '');
+  const [phone, setPhone] = useState(currentRider?.phone || '');
+  const [vehicleNumber, setVehicleNumber] = useState(currentRider?.vehicleNumber || '');
+  const [vehicleType, setVehicleType] = useState(currentRider?.vehicleType || 'bike');
+  const [licenseNumber, setLicenseNumber] = useState(currentRider?.licenseNumber || '');
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    updateRiderProfile(currentRiderId, {
+      name,
+      phone,
+      vehicleNumber: vehicleNumber.toUpperCase(),
+      vehicleType,
+      licenseNumber
+    });
+  };
+
+  return (
+    <div className="card animate-fade-in">
+      <h3 style={{ fontSize: '1.1rem', fontWeight: 800, marginBottom: '1.25rem' }}>Profile & Vehicle Specifications</h3>
+      
+      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        {/* Toggle online/offline status */}
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: '1rem',
+          backgroundColor: currentRider?.status === 'online' ? 'var(--primary-green-light)' : 'var(--neutral-light)',
+          border: `1px solid ${currentRider?.status === 'online' ? 'var(--primary-green)' : 'var(--neutral-border)'}`,
+          borderRadius: 'var(--radius-lg)'
+        }}>
+          <div>
+            <h4 style={{ fontSize: '0.9rem', fontWeight: 800 }}>
+              Duty Status: {currentRider?.status === 'online' ? '🟢 Online (Accepting Jobs)' : '⚪ Offline'}
+            </h4>
+            <p style={{ fontSize: '0.72rem', color: 'var(--neutral-muted)', marginTop: '0.1rem' }}>
+              Change whether you are available to pick up pending delivery orders.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => toggleRiderStatus(currentRiderId)}
+            className={`btn btn-sm ${currentRider?.status === 'online' ? 'btn-orange' : 'btn-primary'}`}
+            style={{ fontWeight: 700, borderRadius: 'var(--radius-md)' }}
+          >
+            {currentRider?.status === 'online' ? 'Go Offline' : 'Go Online'}
+          </button>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '1rem' }}>
+          <div>
+            <label style={{ fontSize: '0.75rem', fontWeight: 700, display: 'block', marginBottom: '0.35rem' }}>Full Name</label>
+            <input
+              type="text"
+              required
+              value={name}
+              onChange={e => setName(e.target.value)}
+              className="input-field"
+            />
+          </div>
+
+          <div>
+            <label style={{ fontSize: '0.75rem', fontWeight: 700, display: 'block', marginBottom: '0.35rem' }}>Contact Mobile</label>
+            <input
+              type="text"
+              required
+              value={phone}
+              onChange={e => setPhone(e.target.value)}
+              className="input-field"
+            />
+          </div>
+
+          <div>
+            <label style={{ fontSize: '0.75rem', fontWeight: 700, display: 'block', marginBottom: '0.35rem' }}>Vehicle Plate Number</label>
+            <input
+              type="text"
+              required
+              value={vehicleNumber}
+              onChange={e => setVehicleNumber(e.target.value)}
+              className="input-field"
+              placeholder="e.g. DL 01 AB 1234"
+            />
+          </div>
+
+          <div>
+            <label style={{ fontSize: '0.75rem', fontWeight: 700, display: 'block', marginBottom: '0.35rem' }}>Vehicle Type</label>
+            <select
+              value={vehicleType}
+              onChange={e => setVehicleType(e.target.value)}
+              className="input-field"
+              style={{ height: '38px', padding: '0 0.5rem', borderRadius: 'var(--radius-md)' }}
+            >
+              <option value="bike">Motorcycle 🏍️</option>
+              <option value="scooter">Scooter 🛵</option>
+              <option value="cycle">Bicycle 🚲</option>
+              <option value="car">Car 🚗</option>
+              <option value="other">Other 📦</option>
+            </select>
+          </div>
+
+          <div style={{ gridColumn: 'span 2' }}>
+            <label style={{ fontSize: '0.75rem', fontWeight: 700, display: 'block', marginBottom: '0.35rem' }}>Driving License Number (Optional)</label>
+            <input
+              type="text"
+              value={licenseNumber}
+              onChange={e => setLicenseNumber(e.target.value)}
+              className="input-field"
+              placeholder="e.g. DL-2015-XXXXXXXX"
+            />
+          </div>
+        </div>
+
+        <button type="submit" className="btn btn-primary" style={{ width: 'fit-content', fontWeight: 700, padding: '0.6rem 1.5rem', marginTop: '0.5rem' }}>
+          Save Profile Updates
+        </button>
+      </form>
     </div>
   );
 };

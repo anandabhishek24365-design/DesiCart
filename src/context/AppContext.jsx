@@ -5,10 +5,15 @@ import {
   INITIAL_COUPONS,
   INITIAL_DELIVERY_PARTNERS
 } from '../data/initialData';
+import { auth, isFirebaseEnabled } from '../firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 
 export const AppContext = createContext();
 
 export const AppProvider = ({ children }) => {
+  // Firebase Auth user state
+  const [firebaseUser, setFirebaseUser] = useState(null);
+
   // Active Role switcher state
   const [activeRole, setActiveRole] = useState(() => {
     return localStorage.getItem('delivery_platform_role') || 'customer';
@@ -63,15 +68,102 @@ export const AppProvider = ({ children }) => {
   // Toast notifications state
   const [notifications, setNotifications] = useState([]);
 
+  // Admin notification count for new pending registrations
+  const [adminNewRegistrationsCount, setAdminNewRegistrationsCount] = useState(() => {
+    const saved = localStorage.getItem('delivery_platform_admin_new_reg');
+    return saved ? parseInt(saved) : 0;
+  });
+
   // Theme state
   const [darkMode, setDarkMode] = useState(() => {
     return localStorage.getItem('delivery_platform_dark') === 'true';
   });
 
+  // Admins state
+  const [admins, setAdmins] = useState(() => {
+    const saved = localStorage.getItem('delivery_platform_admins');
+    return saved ? JSON.parse(saved) : [
+      { email: 'testadmin24365@gmail.com', name: 'Test Administrator', status: 'active', createdAt: new Date().toISOString() }
+    ];
+  });
+
+  // Activity Log
+  const [activityLog, setActivityLog] = useState(() => {
+    const saved = localStorage.getItem('delivery_platform_activity_log');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  // Saved customer addresses
+  const [savedAddresses, setSavedAddresses] = useState(() => {
+    const saved = localStorage.getItem('delivery_platform_saved_addresses');
+    return saved ? JSON.parse(saved) : [
+      { id: 'addr_1', address: 'Noida Sector 62, UP', tag: 'Home', isDefault: true },
+      { id: 'addr_2', address: 'DLF CyberCity, Building 5, Gurugram', tag: 'Office', isDefault: false }
+    ];
+  });
+
+  // Saved customer payments
+  const [savedPayments, setSavedPayments] = useState(() => {
+    const saved = localStorage.getItem('delivery_platform_saved_payments');
+    return saved ? JSON.parse(saved) : [
+      { id: 'pay_1', type: 'upi', detail: 'jane@paytm', provider: 'Paytm' },
+      { id: 'pay_2', type: 'card', detail: 'VISA •••• 4242', provider: 'HDFC Bank' }
+    ];
+  });
+
+  // Platform global settings
+  const [platformSettings, setPlatformSettings] = useState(() => {
+    const saved = localStorage.getItem('delivery_platform_settings');
+    return saved ? JSON.parse(saved) : { commissionRate: 10, baseDeliveryPay: 45, maintenanceMode: false };
+  });
+
+  // Customer support tickets
+  const [supportTickets, setSupportTickets] = useState(() => {
+    const saved = localStorage.getItem('delivery_platform_support_tickets');
+    return saved ? JSON.parse(saved) : [
+      { id: 'ticket_1', customerEmail: 'customer@desicart.com', subject: 'Refund for missing items in order #101', message: 'I ordered Premium Basmati Rice and mustard oil, but mustard oil was missing from the bag. Please refund ₹195.', status: 'pending', createdAt: new Date(Date.now() - 3600000 * 2).toISOString(), reply: null },
+      { id: 'ticket_2', customerEmail: 'customer@desicart.com', subject: 'Rider delayed delivery', message: 'The rider took 40 minutes instead of the estimated 15 minutes. The food was cold.', status: 'resolved', createdAt: new Date(Date.now() - 3600000 * 24).toISOString(), reply: 'Apologies for the delay. We have processed a coupon refund.' }
+    ];
+  });
+
   // Global Geolocation States
-  const [globalCoords, setGlobalCoords] = useState(null);
-  const [globalAddress, setGlobalAddress] = useState('Noida Sector 62, UP');
+  const [globalCoords, setGlobalCoords] = useState(() => {
+    const saved = localStorage.getItem('delivery_platform_coords');
+    return saved ? JSON.parse(saved) : { lat: 28.62, lng: 77.36 };
+  });
+
+  const [globalAddress, setGlobalAddress] = useState(() => {
+    return localStorage.getItem('delivery_platform_address') || 'Noida Sector 62, UP';
+  });
+
   const [isGpsActive, setIsGpsActive] = useState(false);
+
+  // Haversine distance calculator helper (Earth radius R = 6371 km)
+  const getDistanceToStore = (storeCoords) => {
+    if (!globalCoords || !storeCoords) return null;
+    const lat1 = globalCoords.lat;
+    const lon1 = globalCoords.lng;
+    const lat2 = storeCoords.lat;
+    const lon2 = storeCoords.lng;
+    
+    const R = 6371; // km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+      Math.sin(dLon/2) * Math.sin(dLon/2)
+      ; 
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+    return R * c; // distance in km
+  };
+
+  const setGlobalLocation = (address, coords) => {
+    setGlobalAddress(address);
+    setGlobalCoords(coords);
+    localStorage.setItem('delivery_platform_address', address);
+    localStorage.setItem('delivery_platform_coords', JSON.stringify(coords));
+  };
 
   const requestGlobalGPS = () => {
     if (navigator.geolocation) {
@@ -79,46 +171,58 @@ export const AppProvider = ({ children }) => {
         async (position) => {
           const lat = position.coords.latitude;
           const lng = position.coords.longitude;
-          setGlobalCoords({ lat, lng });
+          setGlobalLocation(`Live Location: (${lat.toFixed(4)}, ${lng.toFixed(4)})`, { lat, lng });
           setIsGpsActive(true);
-          
-          setGlobalAddress(`Locating... (${lat.toFixed(4)}, ${lng.toFixed(4)})`);
           
           try {
             const response = await fetch(
               `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`,
-              {
-                headers: {
-                  'Accept-Language': 'en'
-                }
-              }
+              { headers: { 'Accept-Language': 'en' } }
             );
             if (response.ok) {
               const data = await response.json();
               if (data && data.display_name) {
-                setGlobalAddress(data.display_name);
-                showToast('Live location synced automatically from Google Maps / GPS!', 'success');
+                setGlobalLocation(data.display_name, { lat, lng });
+                showToast('Live location synced automatically from GPS!', 'success');
                 return;
               }
             }
           } catch (err) {
             console.error('OSM Nominatim reverse geocoding failed:', err);
           }
-          
-          // Fallback if reverse lookup fails
-          setGlobalAddress(`Live Location: Lat ${lat.toFixed(5)}, Lng ${lng.toFixed(5)}`);
           showToast('Live coordinates synced from GPS!', 'success');
         },
         (error) => {
           console.warn('GPS Geolocation permission denied or failed:', error);
+          showToast('GPS access denied. Using default location.', 'warning');
         }
       );
+    } else {
+      showToast('Geolocation is not supported by your browser.', 'error');
     }
   };
 
   // Run on application load automatically
   useEffect(() => {
     requestGlobalGPS();
+  }, []);
+
+  // Listen to Firebase Auth state
+  useEffect(() => {
+    if (isFirebaseEnabled && auth) {
+      const unsubscribe = onAuthStateChanged(auth, (user) => {
+        if (user) {
+          setFirebaseUser(user);
+          setIsLoggedIn(true);
+          const savedRole = localStorage.getItem('delivery_platform_role') || 'customer';
+          setActiveRole(savedRole);
+        } else {
+          setFirebaseUser(null);
+          setIsLoggedIn(false);
+        }
+      });
+      return unsubscribe;
+    }
   }, []);
 
   // Sync to LocalStorage
@@ -167,6 +271,34 @@ export const AppProvider = ({ children }) => {
     }
   }, [darkMode]);
 
+  useEffect(() => {
+    localStorage.setItem('delivery_platform_admin_new_reg', adminNewRegistrationsCount.toString());
+  }, [adminNewRegistrationsCount]);
+
+  useEffect(() => {
+    localStorage.setItem('delivery_platform_admins', JSON.stringify(admins));
+  }, [admins]);
+
+  useEffect(() => {
+    localStorage.setItem('delivery_platform_activity_log', JSON.stringify(activityLog));
+  }, [activityLog]);
+
+  useEffect(() => {
+    localStorage.setItem('delivery_platform_saved_addresses', JSON.stringify(savedAddresses));
+  }, [savedAddresses]);
+
+  useEffect(() => {
+    localStorage.setItem('delivery_platform_saved_payments', JSON.stringify(savedPayments));
+  }, [savedPayments]);
+
+  useEffect(() => {
+    localStorage.setItem('delivery_platform_settings', JSON.stringify(platformSettings));
+  }, [platformSettings]);
+
+  useEffect(() => {
+    localStorage.setItem('delivery_platform_support_tickets', JSON.stringify(supportTickets));
+  }, [supportTickets]);
+
   // Toast system helper
   const showToast = (message, type = 'success') => {
     const id = Date.now();
@@ -176,7 +308,187 @@ export const AppProvider = ({ children }) => {
     }, 4000);
   };
 
-  // Vendor Registration & Profile
+  // ─── REGISTRATION HELPERS ────────────────────────────────────────────────────
+
+  /**
+   * Look up an existing vendor or rider by Firebase UID.
+   * Returns { type: 'vendor'|'rider', record } or null.
+   */
+  const getRegistrationByUid = (uid) => {
+    if (!uid) return null;
+    const vendor = vendors.find(v => v.firebaseUid === uid);
+    if (vendor) return { type: 'vendor', record: vendor };
+    const rider = deliveryPartners.find(d => d.firebaseUid === uid);
+    if (rider) return { type: 'rider', record: rider };
+    return null;
+  };
+
+  /** Submit a new Store registration (from StoreRegistrationView) */
+  const submitVendorRegistration = (formData) => {
+    const uid = firebaseUser?.uid;
+    if (!uid) { showToast('Authentication error. Please log in again.', 'error'); return false; }
+
+    // Duplicate GST check
+    const gstExists = vendors.some(v => v.gstNumber?.toUpperCase() === formData.gstNumber?.toUpperCase());
+    if (gstExists) {
+      showToast('This GST Number is already registered.', 'error');
+      return false;
+    }
+
+    const newVendor = {
+      id: 'vendor_' + Date.now(),
+      name: formData.storeName,
+      ownerName: formData.ownerName,
+      gstNumber: formData.gstNumber.toUpperCase(),
+      mobile: formData.mobile,
+      category: formData.category || 'grocery',
+      address: formData.address,
+      coords: formData.coords || { lat: 28.62, lng: 77.36 },
+      minOrder: parseInt(formData.minOrder) || 99,
+      rating: 5.0,
+      reviewsCount: 0,
+      deliveryTime: '20-30 mins',
+      image: 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=500&auto=format&fit=crop&q=60',
+      logoBg: ['#10b981', '#f97316', '#22c55e', '#ef4444', '#06b6d4'][Math.floor(Math.random() * 5)],
+      isApproved: false,
+      registrationStatus: 'pending',
+      firebaseUid: uid,
+      registeredAt: new Date().toISOString(),
+      rejectionReason: null,
+      featured: false,
+      bannerOffer: null,
+    };
+
+    setVendors(prev => [...prev, newVendor]);
+    setCurrentVendorId(newVendor.id);
+    setAdminNewRegistrationsCount(c => c + 1);
+    showToast('Store registration submitted! Awaiting Admin approval.', 'info');
+    return true;
+  };
+
+  /** Submit a new Rider registration (from RiderRegistrationView) */
+  const submitRiderRegistration = (formData) => {
+    const uid = firebaseUser?.uid;
+    if (!uid) { showToast('Authentication error. Please log in again.', 'error'); return false; }
+
+    // Duplicate vehicle number check
+    const vehicleExists = deliveryPartners.some(
+      d => d.vehicleNumber?.toUpperCase() === formData.vehicleNumber?.toUpperCase()
+    );
+    if (vehicleExists) {
+      showToast('This Vehicle Number is already registered.', 'error');
+      return false;
+    }
+
+    const newRider = {
+      id: 'rider_' + Date.now(),
+      name: formData.riderName,
+      phone: formData.mobile,
+      vehicleNumber: formData.vehicleNumber.toUpperCase(),
+      vehicleType: formData.vehicleType,
+      licenseNumber: formData.licenseNumber || null,
+      status: 'offline',
+      currentOrderId: null,
+      totalEarnings: 0,
+      registrationStatus: 'pending',
+      firebaseUid: uid,
+      registeredAt: new Date().toISOString(),
+      rejectionReason: null,
+    };
+
+    setDeliveryPartners(prev => [...prev, newRider]);
+    setCurrentRiderId(newRider.id);
+    setAdminNewRegistrationsCount(c => c + 1);
+    showToast('Rider registration submitted! Awaiting Admin approval.', 'info');
+    return true;
+  };
+
+  /** Admin: approve a vendor or rider registration */
+  const adminApproveRegistration = (type, id) => {
+    if (type === 'vendor') {
+      setVendors(prev => prev.map(v =>
+        v.id === id ? { ...v, registrationStatus: 'approved', isApproved: true, rejectionReason: null } : v
+      ));
+      showToast('Store account approved successfully!', 'success');
+      logActivity('Approve Registration', `Approved Store registration for ID: ${id}`);
+    } else {
+      setDeliveryPartners(prev => prev.map(d =>
+        d.id === id ? { ...d, registrationStatus: 'approved', status: 'online', rejectionReason: null } : d
+      ));
+      showToast('Rider account approved successfully!', 'success');
+      logActivity('Approve Registration', `Approved Rider registration for ID: ${id}`);
+    }
+    setAdminNewRegistrationsCount(c => Math.max(0, c - 1));
+  };
+
+  /** Admin: reject a vendor or rider registration with a reason */
+  const adminRejectRegistration = (type, id, reason) => {
+    if (type === 'vendor') {
+      setVendors(prev => prev.map(v =>
+        v.id === id ? { ...v, registrationStatus: 'rejected', isApproved: false, rejectionReason: reason || 'Application did not meet requirements.' } : v
+      ));
+      logActivity('Reject Registration', `Rejected Store registration for ID: ${id}. Reason: ${reason}`);
+    } else {
+      setDeliveryPartners(prev => prev.map(d =>
+        d.id === id ? { ...d, registrationStatus: 'rejected', rejectionReason: reason || 'Application did not meet requirements.' } : d
+      ));
+      logActivity('Reject Registration', `Rejected Rider registration for ID: ${id}. Reason: ${reason}`);
+    }
+    setAdminNewRegistrationsCount(c => Math.max(0, c - 1));
+    showToast('Registration rejected.', 'warning');
+  };
+
+  /** Admin: suspend an approved vendor or rider */
+  const adminSuspendAccount = (type, id) => {
+    if (type === 'vendor') {
+      setVendors(prev => prev.map(v =>
+        v.id === id ? { ...v, registrationStatus: 'suspended', isApproved: false } : v
+      ));
+      logActivity('Suspend Account', `Suspended Store account for ID: ${id}`);
+    } else {
+      setDeliveryPartners(prev => prev.map(d =>
+        d.id === id ? { ...d, registrationStatus: 'suspended', status: 'offline' } : d
+      ));
+      logActivity('Suspend Account', `Suspended Rider account for ID: ${id}`);
+    }
+    showToast('Account suspended.', 'warning');
+  };
+
+  /** Admin: reactivate a suspended vendor or rider */
+  const adminReactivateAccount = (type, id) => {
+    if (type === 'vendor') {
+      setVendors(prev => prev.map(v =>
+        v.id === id ? { ...v, registrationStatus: 'approved', isApproved: true } : v
+      ));
+      logActivity('Reactivate Account', `Reactivated Store account for ID: ${id}`);
+    } else {
+      setDeliveryPartners(prev => prev.map(d =>
+        d.id === id ? { ...d, registrationStatus: 'approved', status: 'online' } : d
+      ));
+      logActivity('Reactivate Account', `Reactivated Rider account for ID: ${id}`);
+    }
+    showToast('Account reactivated successfully!', 'success');
+  };
+
+  /**
+   * User-side: clear a rejected registration so they can resubmit.
+   * Removes the old rejected entry — the registration form will show again.
+   */
+  const clearRejectedRegistration = (type, id) => {
+    if (type === 'vendor') {
+      setVendors(prev => prev.filter(v => v.id !== id));
+    } else {
+      setDeliveryPartners(prev => prev.filter(d => d.id !== id));
+    }
+  };
+
+  /** Clear admin new-registration notification badge */
+  const clearAdminNotifications = () => {
+    setAdminNewRegistrationsCount(0);
+  };
+
+  // ─── VENDOR MANAGEMENT (Admin direct-add / legacy) ───────────────────────────
+
   const registerVendor = (newVendor) => {
     const vendorId = 'vendor_' + Date.now();
     const vendorData = {
@@ -184,7 +496,11 @@ export const AppProvider = ({ children }) => {
       id: vendorId,
       rating: 5.0,
       reviewsCount: 0,
-      isApproved: false, // Needs Admin approval
+      isApproved: false,
+      registrationStatus: 'pending',
+      firebaseUid: null,
+      registeredAt: new Date().toISOString(),
+      rejectionReason: null,
       logoBg: ['#10b981', '#f97316', '#22c55e', '#ef4444', '#06b6d4'][Math.floor(Math.random() * 5)]
     };
     setVendors((prev) => [...prev, vendorData]);
@@ -194,7 +510,7 @@ export const AppProvider = ({ children }) => {
 
   const approveVendor = (vendorId) => {
     setVendors((prev) =>
-      prev.map((v) => (v.id === vendorId ? { ...v, isApproved: true } : v))
+      prev.map((v) => (v.id === vendorId ? { ...v, isApproved: true, registrationStatus: 'approved' } : v))
     );
     showToast('Vendor approved successfully!', 'success');
   };
@@ -237,7 +553,11 @@ export const AppProvider = ({ children }) => {
       id,
       status: 'online',
       currentOrderId: null,
-      totalEarnings: 0
+      totalEarnings: 0,
+      registrationStatus: 'pending',
+      firebaseUid: null,
+      registeredAt: new Date().toISOString(),
+      rejectionReason: null,
     };
     setDeliveryPartners((prev) => [...prev, rider]);
     showToast('Delivery Partner registered successfully!', 'success');
@@ -251,7 +571,11 @@ export const AppProvider = ({ children }) => {
       id: vendorId,
       rating: 5.0,
       reviewsCount: 0,
-      isApproved: true, // Instant approval
+      isApproved: true,
+      registrationStatus: 'approved',
+      firebaseUid: null,
+      registeredAt: new Date().toISOString(),
+      rejectionReason: null,
       logoBg: ['#10b981', '#f97316', '#22c55e', '#ef4444', '#06b6d4'][Math.floor(Math.random() * 5)]
     };
     setVendors((prev) => [...prev, vendorData]);
@@ -266,7 +590,11 @@ export const AppProvider = ({ children }) => {
       id,
       status: 'online',
       currentOrderId: null,
-      totalEarnings: 0
+      totalEarnings: 0,
+      registrationStatus: 'approved',
+      firebaseUid: null,
+      registeredAt: new Date().toISOString(),
+      rejectionReason: null,
     };
     setDeliveryPartners((prev) => [...prev, rider]);
     showToast('Delivery Rider added instantly!', 'success');
@@ -274,37 +602,42 @@ export const AppProvider = ({ children }) => {
   };
 
   // Auth Operations
-  const login = (role, email, vendorId = 'vendor_1', riderId = 'rider_1') => {
+  const login = (role, identifier) => {
     setActiveRole(role);
     setIsLoggedIn(true);
-    
+
     let name = 'User';
     if (role === 'customer') {
-      name = email || 'Jane Doe (Customer)';
+      name = identifier || 'Jane Doe (Customer)';
     } else if (role === 'vendor') {
-      setCurrentVendorId(vendorId);
-      const vend = vendors.find(v => v.id === vendorId);
-      name = vend ? vend.name : 'Store Partner';
+      name = identifier || 'Store Partner';
     } else if (role === 'delivery') {
-      setCurrentRiderId(riderId);
-      const rider = deliveryPartners.find(d => d.id === riderId);
-      name = rider ? rider.name : 'Delivery Partner';
+      name = identifier || 'Delivery Partner';
     } else if (role === 'admin') {
-      name = 'System Administrator';
+      name = identifier || 'System Administrator';
+    } else if (role === 'superadmin') {
+      name = identifier || 'Super Admin';
     }
 
-    showToast(`Welcome back! Logged in successfully as ${name}.`, 'success');
+    showToast(`Welcome back! Logged in as ${name}.`, 'success');
   };
 
-  const logout = () => {
+  const logout = async () => {
+    if (isFirebaseEnabled && auth) {
+      try {
+        await auth.signOut();
+      } catch (err) {
+        console.error('Firebase SignOut error:', err);
+      }
+    }
     setIsLoggedIn(false);
+    setFirebaseUser(null);
     showToast('Logged out successfully.', 'info');
   };
 
   // Customer Cart Operations
   const addToCart = (product, vendorId) => {
     setCart((prev) => {
-      // Check if buying from a different vendor (Zomato/Blinkit limits cart to one store at a time)
       const isDifferentVendor = prev.items.length > 0 && prev.items[0].vendorId !== vendorId;
       let items = isDifferentVendor ? [] : [...prev.items];
       
@@ -319,10 +652,8 @@ export const AppProvider = ({ children }) => {
         items.push({ ...product, quantity: 1 });
       }
 
-      // Recalculate Subtotal
       const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
       
-      // Keep applied coupon if minOrder is still met
       let appliedCoupon = prev.appliedCoupon;
       let discount = 0;
       if (appliedCoupon) {
@@ -332,7 +663,7 @@ export const AppProvider = ({ children }) => {
           } else if (appliedCoupon.discountType === 'flat') {
             discount = appliedCoupon.discountValue;
           } else if (appliedCoupon.discountType === 'free-delivery') {
-            discount = 0; // Handled in delivery fee
+            discount = 0;
           }
         } else {
           appliedCoupon = null;
@@ -436,9 +767,20 @@ export const AppProvider = ({ children }) => {
       return null;
     }
 
-    const orderId = 'order_' + Date.now();
     const vendorId = cart.items[0].vendorId;
-    const vendorName = vendors.find((v) => v.id === vendorId)?.name || 'Local Vendor';
+    const vendor = vendors.find((v) => v.id === vendorId);
+    const vendorName = vendor?.name || 'Local Vendor';
+
+    // Verify store is within 15 km service radius before creating order
+    if (vendor && vendor.coords) {
+      const dist = getDistanceToStore(vendor.coords);
+      if (dist === null || dist > 15) {
+        showToast(`Checkout failed: ${vendorName} is outside our 15 km delivery area (${dist ? dist.toFixed(1) : 'unknown'} km away).`, 'error');
+        return null;
+      }
+    }
+
+    const orderId = 'order_' + Date.now();
 
     const newOrder = {
       id: orderId,
@@ -449,18 +791,17 @@ export const AppProvider = ({ children }) => {
       discount: cart.discount,
       deliveryFee: cart.deliveryFee,
       total: cart.total,
-      status: 'pending', // pending -> preparing -> ready -> out_for_delivery -> delivered
+      status: 'pending',
       createdAt: new Date().toISOString(),
       address,
       paymentMethod,
       deliveryPartnerId: null,
-      customerName: 'Jane Doe (Customer)',
+      customerName: firebaseUser?.displayName || 'Customer',
       customerPhone: '+91 98765 00000',
       ratings: null,
       reviews: null
     };
 
-    // Deduct stock
     setProducts((prev) =>
       prev.map((p) => {
         const cartItem = cart.items.find((item) => item.id === p.id);
@@ -471,10 +812,7 @@ export const AppProvider = ({ children }) => {
       })
     );
 
-    // Save order
     setOrders((prev) => [newOrder, ...prev]);
-
-    // Clear cart
     setCart({ items: [], subtotal: 0, discount: 0, deliveryFee: 40, total: 0, appliedCoupon: null });
     showToast('Order placed successfully! Tracking live state.', 'success');
     
@@ -492,13 +830,10 @@ export const AppProvider = ({ children }) => {
           updatedOrder.deliveryPartnerId = riderId;
         }
 
-        // Adjust finances if completed
         if (status === 'delivered') {
-          // Update rider earnings
           setDeliveryPartners((riders) =>
             riders.map((r) => {
               if (r.id === (riderId || order.deliveryPartnerId)) {
-                // Base pay $45 + delivery fee
                 return { ...r, totalEarnings: r.totalEarnings + 45 + order.deliveryFee, currentOrderId: null };
               }
               return r;
@@ -532,7 +867,6 @@ export const AppProvider = ({ children }) => {
       )
     );
     
-    // Recalculate vendor overall ratings
     const order = orders.find(o => o.id === orderId);
     if (order) {
       setVendors((prevVendors) =>
@@ -554,11 +888,194 @@ export const AppProvider = ({ children }) => {
   const addCoupon = (couponData) => {
     setCoupons((prev) => [...prev, couponData]);
     showToast(`Coupon ${couponData.code} added.`, 'success');
+    logActivity('Add Coupon', `Created coupon: ${couponData.code} (${couponData.description})`);
   };
 
   const deleteCoupon = (code) => {
     setCoupons((prev) => prev.filter((c) => c.code !== code));
     showToast(`Coupon ${code} removed.`, 'warning');
+    logActivity('Delete Coupon', `Deleted coupon: ${code}`);
+  };
+
+  // Activity Log
+  const logActivity = (action, details) => {
+    const newLog = {
+      id: 'log_' + Date.now() + Math.random().toString(36).substr(2, 5),
+      timestamp: new Date().toISOString(),
+      email: firebaseUser?.email || 'unknown@desicart.com',
+      role: activeRole,
+      action,
+      details
+    };
+    setActivityLog((prev) => [newLog, ...prev]);
+  };
+
+  // Super Admin functions
+  const createAdminAccount = (email, name) => {
+    if (!email.toLowerCase().endsWith('24365@gmail.com')) {
+      showToast('Admin email must end with 24365@gmail.com', 'error');
+      return false;
+    }
+    if (admins.some(a => a.email.toLowerCase() === email.toLowerCase())) {
+      showToast('Admin account already exists!', 'error');
+      return false;
+    }
+    const newAdmin = {
+      email: email.toLowerCase(),
+      name,
+      status: 'active',
+      createdAt: new Date().toISOString()
+    };
+    setAdmins(prev => [...prev, newAdmin]);
+    logActivity('Create Admin', `Created Admin account for ${email} (${name})`);
+    showToast(`Admin ${email} created successfully!`, 'success');
+    return true;
+  };
+
+  const toggleAdminStatus = (email) => {
+    setAdmins(prev => prev.map(a => {
+      if (a.email.toLowerCase() === email.toLowerCase()) {
+        const newStatus = a.status === 'active' ? 'inactive' : 'active';
+        logActivity('Toggle Admin Status', `Changed Admin status for ${email} to ${newStatus}`);
+        showToast(`Admin status changed to ${newStatus}`, 'info');
+        return { ...a, status: newStatus };
+      }
+      return a;
+    }));
+  };
+
+  const deleteAdminAccount = (email) => {
+    setAdmins(prev => prev.filter(a => a.email.toLowerCase() !== email.toLowerCase()));
+    logActivity('Remove Admin', `Deleted Admin account for ${email}`);
+    showToast(`Admin ${email} removed.`, 'warning');
+  };
+
+  const updatePlatformSettings = (settings) => {
+    setPlatformSettings(settings);
+    logActivity('Update Platform Settings', `Settings updated: Commission ${settings.commissionRate}%, Base Pay ₹${settings.baseDeliveryPay}, Maint. Mode: ${settings.maintenanceMode}`);
+    showToast('Platform settings updated successfully!', 'success');
+  };
+
+  const resolveSupportTicket = (ticketId, reply) => {
+    setSupportTickets(prev => prev.map(t => {
+      if (t.id === ticketId) {
+        logActivity('Resolve Ticket', `Resolved support ticket ${ticketId} with reply: ${reply}`);
+        showToast('Support ticket resolved!', 'success');
+        return { ...t, status: 'resolved', reply };
+      }
+      return t;
+    }));
+  };
+
+  const submitComplaint = (subject, message) => {
+    const newTicket = {
+      id: 'ticket_' + Date.now(),
+      customerEmail: firebaseUser?.email || 'customer@desicart.com',
+      subject,
+      message,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+      reply: null
+    };
+    setSupportTickets(prev => [newTicket, ...prev]);
+    showToast('Support ticket submitted successfully!', 'success');
+  };
+
+  // Customer Profile functions
+  const updateCustomerProfile = (name) => {
+    if (isFirebaseEnabled && auth.currentUser) {
+      updateProfile(auth.currentUser, { displayName: name })
+        .then(() => {
+          setFirebaseUser({ ...auth.currentUser });
+          showToast('Profile updated successfully!', 'success');
+        })
+        .catch(err => {
+          showToast('Failed to update profile: ' + err.message, 'error');
+        });
+    } else {
+      showToast('Profile updated!', 'success');
+    }
+  };
+
+  const addCustomerAddress = (address, tag) => {
+    const newAddr = {
+      id: 'addr_' + Date.now(),
+      address,
+      tag: tag || 'Home',
+      isDefault: savedAddresses.length === 0
+    };
+    setSavedAddresses(prev => [...prev, newAddr]);
+    showToast('Address added successfully!', 'success');
+  };
+
+  const deleteCustomerAddress = (id) => {
+    setSavedAddresses(prev => {
+      const filtered = prev.filter(a => a.id !== id);
+      if (filtered.length > 0 && !filtered.some(a => a.isDefault)) {
+        filtered[0].isDefault = true;
+      }
+      return filtered;
+    });
+    showToast('Address removed.', 'warning');
+  };
+
+  const setDefaultAddress = (id) => {
+    setSavedAddresses(prev => prev.map(a => ({
+      ...a,
+      isDefault: a.id === id
+    })));
+    const addr = savedAddresses.find(a => a.id === id);
+    if (addr) setGlobalAddress(addr.address);
+    showToast('Default address updated!', 'success');
+  };
+
+  const addCustomerPayment = (type, detail, provider) => {
+    const newPay = {
+      id: 'pay_' + Date.now(),
+      type,
+      detail,
+      provider
+    };
+    setSavedPayments(prev => [...prev, newPay]);
+    showToast('Payment method saved!', 'success');
+  };
+
+  const deleteCustomerPayment = (id) => {
+    setSavedPayments(prev => prev.filter(p => p.id !== id));
+    showToast('Payment method removed.', 'warning');
+  };
+
+  // Store profile update for Vendor
+  const updateVendorProfile = (vendorId, updateData) => {
+    setVendors(prev => prev.map(v => {
+      if (v.id === vendorId) {
+        showToast('Store profile updated successfully!', 'success');
+        return { ...v, ...updateData };
+      }
+      return v;
+    }));
+  };
+
+  // Rider Profile updates
+  const updateRiderProfile = (riderId, updateData) => {
+    setDeliveryPartners(prev => prev.map(d => {
+      if (d.id === riderId) {
+        showToast('Rider profile updated!', 'success');
+        return { ...d, ...updateData };
+      }
+      return d;
+    }));
+  };
+
+  const toggleRiderStatus = (riderId) => {
+    setDeliveryPartners(prev => prev.map(d => {
+      if (d.id === riderId) {
+        const newStatus = d.status === 'online' ? 'offline' : 'online';
+        showToast(`You are now ${newStatus}!`, 'info');
+        return { ...d, status: newStatus };
+      }
+      return d;
+    }));
   };
 
   return (
@@ -568,6 +1085,8 @@ export const AppProvider = ({ children }) => {
         setActiveRole,
         isLoggedIn,
         setIsLoggedIn,
+        firebaseUser,
+        isFirebaseEnabled,
         login,
         logout,
         vendors,
@@ -585,6 +1104,18 @@ export const AppProvider = ({ children }) => {
         darkMode,
         setDarkMode,
         showToast,
+        // Registration flow
+        getRegistrationByUid,
+        submitVendorRegistration,
+        submitRiderRegistration,
+        adminApproveRegistration,
+        adminRejectRegistration,
+        adminSuspendAccount,
+        adminReactivateAccount,
+        clearRejectedRegistration,
+        adminNewRegistrationsCount,
+        clearAdminNotifications,
+        // Legacy/admin direct-add
         registerVendor,
         approveVendor,
         rejectVendor,
@@ -608,7 +1139,32 @@ export const AppProvider = ({ children }) => {
         globalCoords,
         globalAddress,
         isGpsActive,
-        requestGlobalGPS
+        requestGlobalGPS,
+        getDistanceToStore,
+        setGlobalLocation,
+        // New features
+        admins,
+        activityLog,
+        savedAddresses,
+        savedPayments,
+        platformSettings,
+        supportTickets,
+        logActivity,
+        createAdminAccount,
+        toggleAdminStatus,
+        deleteAdminAccount,
+        updatePlatformSettings,
+        resolveSupportTicket,
+        submitComplaint,
+        updateCustomerProfile,
+        addCustomerAddress,
+        deleteCustomerAddress,
+        setDefaultAddress,
+        addCustomerPayment,
+        deleteCustomerPayment,
+        updateVendorProfile,
+        updateRiderProfile,
+        toggleRiderStatus
       }}
     >
       {children}

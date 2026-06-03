@@ -1,6 +1,7 @@
 import React, { useContext, useState, useRef } from 'react';
 import { AppContext } from '../context/AppContext';
 import { AnalyticsChart } from '../components/AnalyticsChart';
+import { AddressSelector } from '../components/AddressSelector';
 import {
   TrendingUp,
   Package,
@@ -19,7 +20,8 @@ import {
   Image as ImageIcon,
   Check,
   Sparkles,
-  LogOut
+  LogOut,
+  MapPin
 } from 'lucide-react';
 
 const CATEGORY_TEMPLATES = {
@@ -63,6 +65,32 @@ const CATEGORY_TEMPLATES = {
   ]
 };
 
+const STORE_BANNER_TEMPLATES = {
+  grocery: [
+    { name: 'Indian Grocery Market', url: 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=800&auto=format&fit=crop&q=80' },
+    { name: 'Supermarket Shelves', url: 'https://images.unsplash.com/photo-1578916171728-46686eac8d58?w=800&auto=format&fit=crop&q=80' },
+    { name: 'Indian Spices & Pulses', url: 'https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=800&auto=format&fit=crop&q=80' }
+  ],
+  food: [
+    { name: 'Delicious Biryani Feast', url: 'https://images.unsplash.com/photo-1565557623262-b51c2513a641?w=800&auto=format&fit=crop&q=80' },
+    { name: 'Pizzas & Burgers', url: 'https://images.unsplash.com/photo-1513104890138-7c749659a591?w=800&auto=format&fit=crop&q=80' },
+    { name: 'Traditional Tandoori', url: 'https://images.unsplash.com/photo-1585938338392-50a59970d8ee?w=800&auto=format&fit=crop&q=80' }
+  ],
+  'fruits-veg': [
+    { name: 'Fresh Greens & Fruits', url: 'https://images.unsplash.com/photo-1610832958506-ee5633619144?w=800&auto=format&fit=crop&q=80' },
+    { name: 'Organic Produce Stall', url: 'https://images.unsplash.com/photo-1592417817098-8f3d6eb19675?w=800&auto=format&fit=crop&q=80' },
+    { name: 'Farmer\'s Market', url: 'https://images.unsplash.com/photo-1488459718432-36c55e9b602d?w=800&auto=format&fit=crop&q=80' }
+  ],
+  medicine: [
+    { name: 'Modern Apothecary', url: 'https://images.unsplash.com/photo-1576091160550-2173dba999ef?w=800&auto=format&fit=crop&q=80' },
+    { name: 'Medical Wellness Supplies', url: 'https://images.unsplash.com/photo-1607619056574-7b8f304f3c6f?w=800&auto=format&fit=crop&q=80' }
+  ],
+  essentials: [
+    { name: 'Essentials Cabinet', url: 'https://images.unsplash.com/photo-1584622650111-993a426fbf0a?w=800&auto=format&fit=crop&q=80' },
+    { name: 'Home Organization Store', url: 'https://images.unsplash.com/photo-1610557892470-76d747e29499?w=800&auto=format&fit=crop&q=80' }
+  ]
+};
+
 export const VendorDashboard = () => {
   const {
     vendors,
@@ -74,7 +102,8 @@ export const VendorDashboard = () => {
     deleteProduct,
     updateOrderStatus,
     showToast,
-    logout
+    logout,
+    updateVendorProfile
   } = useContext(AppContext);
 
   // Active sub-tab state
@@ -249,6 +278,12 @@ export const VendorDashboard = () => {
             className={`btn btn-sm ${activeTab === 'reviews' ? 'btn-primary' : 'btn-secondary'}`}
           >
             Reviews ({currentVendor?.reviewsCount || 0})
+          </button>
+          <button
+            onClick={() => setActiveTab('profile')}
+            className={`btn btn-sm ${activeTab === 'profile' ? 'btn-primary' : 'btn-secondary'}`}
+          >
+            Store Profile
           </button>
           
           <button
@@ -1087,6 +1122,15 @@ export const VendorDashboard = () => {
         </div>
       )}
 
+      {/* SUB-VIEW 5: STORE PROFILE */}
+      {activeTab === 'profile' && (
+        <StoreProfileView
+          currentVendor={currentVendor}
+          updateVendorProfile={updateVendorProfile}
+          currentVendorId={currentVendorId}
+        />
+      )}
+
       {/* INVENTORY FORMS MODALS (MOCKED WITH CSS LIGHTBOXES) */}
       {(showAddModal || showEditModal) && (
         <div
@@ -1302,6 +1346,539 @@ export const VendorDashboard = () => {
           </div>
         </div>
       )}
+    </div>
+  );
+};
+
+/* ─── Premium Store Operations Settings ─── */
+const StoreProfileView = ({ currentVendor, updateVendorProfile, currentVendorId }) => {
+  const [storeName, setStoreName] = useState(currentVendor?.name || '');
+  const [ownerName, setOwnerName] = useState(currentVendor?.ownerName || '');
+  const [mobile, setMobile] = useState(currentVendor?.mobile || '');
+  const [category, setCategory] = useState(currentVendor?.category || 'grocery');
+  const [address, setAddress] = useState(currentVendor?.address || '');
+  const [minOrder, setMinOrder] = useState(currentVendor?.minOrder || 99);
+  const [image, setImage] = useState(currentVendor?.image || '');
+  const [isOpen, setIsOpen] = useState(currentVendor?.isOpen !== false);
+  const [coords, setCoords] = useState(currentVendor?.coords || null);
+
+  const [isDetecting, setIsDetecting] = useState(false);
+  const [detectionSuccess, setDetectionSuccess] = useState(!!currentVendor?.coords);
+  const [isMapOpen, setIsMapOpen] = useState(false);
+
+  const [bannerTab, setBannerTab] = useState('gallery'); // 'gallery' | 'upload' | 'url'
+  const [showAllBanners, setShowAllBanners] = useState(false);
+  const bannerFileInputRef = useRef(null);
+
+  const detectLocation = () => {
+    if (!navigator.geolocation) {
+      alert('Geolocation is not supported by this browser.');
+      return;
+    }
+    setIsDetecting(true);
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+        setCoords({ lat, lng });
+        setDetectionSuccess(true);
+        setIsDetecting(false);
+        
+        try {
+          const response = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`,
+            { headers: { 'Accept-Language': 'en' } }
+          );
+          if (response.ok) {
+            const data = await response.json();
+            if (data && data.display_name) {
+              setAddress(data.display_name);
+              return;
+            }
+          }
+        } catch (err) {
+          console.error('Nominatim reverse geocoding failed:', err);
+        }
+        setAddress(`Coordinates: (${lat.toFixed(4)}, ${lng.toFixed(4)})`);
+      },
+      (error) => {
+        console.error('GPS Geolocation error:', error);
+        setIsDetecting(false);
+        alert('Failed to access location services. Please check permissions.');
+      }
+    );
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    updateVendorProfile(currentVendorId, {
+      name: storeName,
+      ownerName,
+      mobile,
+      category,
+      address,
+      coords,
+      minOrder: parseInt(minOrder),
+      image,
+      isOpen
+    });
+  };
+
+  return (
+    <div className="card animate-fade-in">
+      <h3 style={{ fontSize: '1.1rem', fontWeight: 800, marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+        <span>Store Profile & Operations Settings</span>
+      </h3>
+      
+      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        {/* Toggle open/closed */}
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: '1rem',
+          backgroundColor: isOpen ? 'var(--primary-green-light)' : '#fee2e2',
+          border: `1px solid ${isOpen ? 'var(--primary-green)' : '#fca5a5'}`,
+          borderRadius: 'var(--radius-lg)',
+          marginBottom: '1rem'
+        }}>
+          <div>
+            <h4 style={{ fontSize: '0.9rem', fontWeight: 800, color: isOpen ? 'var(--neutral-text)' : '#b91c1c' }}>
+              Store Status: {isOpen ? '🟢 Open for Orders' : '🔴 Closed'}
+            </h4>
+            <p style={{ fontSize: '0.72rem', color: 'var(--neutral-muted)', marginTop: '0.1rem' }}>
+              Toggle whether customers can place new orders from your store.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsOpen(!isOpen)}
+            className={`btn btn-sm ${isOpen ? 'btn-primary' : 'btn-orange'}`}
+            style={{ fontWeight: 700 }}
+          >
+            {isOpen ? 'Close Store' : 'Open Store'}
+          </button>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '1rem' }}>
+          <div>
+            <label style={{ fontSize: '0.75rem', fontWeight: 700, display: 'block', marginBottom: '0.35rem' }}>Store Name</label>
+            <input
+              type="text"
+              required
+              value={storeName}
+              onChange={e => setStoreName(e.target.value)}
+              className="input-field"
+            />
+          </div>
+
+          <div>
+            <label style={{ fontSize: '0.75rem', fontWeight: 700, display: 'block', marginBottom: '0.35rem' }}>Owner Full Name</label>
+            <input
+              type="text"
+              required
+              value={ownerName}
+              onChange={e => setOwnerName(e.target.value)}
+              className="input-field"
+            />
+          </div>
+
+          <div>
+            <label style={{ fontSize: '0.75rem', fontWeight: 700, display: 'block', marginBottom: '0.35rem' }}>Mobile Number</label>
+            <input
+              type="text"
+              required
+              value={mobile}
+              onChange={e => setMobile(e.target.value)}
+              className="input-field"
+            />
+          </div>
+
+          <div>
+            <label style={{ fontSize: '0.75rem', fontWeight: 700, display: 'block', marginBottom: '0.35rem' }}>GST Number (Read-only)</label>
+            <input
+              type="text"
+              disabled
+              value={currentVendor?.gstNumber || 'N/A'}
+              className="input-field"
+              style={{ backgroundColor: 'var(--neutral-light)', cursor: 'not-allowed' }}
+            />
+          </div>
+
+          <div>
+            <label style={{ fontSize: '0.75rem', fontWeight: 700, display: 'block', marginBottom: '0.35rem' }}>Minimum Order Amount (₹)</label>
+            <input
+              type="number"
+              required
+              value={minOrder}
+              onChange={e => setMinOrder(e.target.value)}
+              className="input-field"
+            />
+          </div>
+
+          <div>
+            <label style={{ fontSize: '0.75rem', fontWeight: 700, display: 'block', marginBottom: '0.35rem' }}>Category</label>
+            <select
+              value={category}
+              onChange={e => setCategory(e.target.value)}
+              className="input-field"
+              style={{ height: '38px', padding: '0 0.5rem' }}
+            >
+              <option value="grocery">Groceries</option>
+              <option value="food">Restaurants & Food</option>
+              <option value="fruits-veg">Fruits & Vegetables</option>
+              <option value="medicine">Medicines & Health</option>
+              <option value="essentials">Daily Essentials</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Store Location Map Selector */}
+        <div style={{
+          padding: '1.25rem',
+          backgroundColor: 'var(--neutral-light)',
+          border: '1px solid var(--neutral-border)',
+          borderRadius: 'var(--radius-lg)',
+          marginBottom: '0.5rem',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.75rem'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--neutral-text)' }}>Store Location & Address</label>
+            <button
+              type="button"
+              onClick={() => setIsMapOpen(true)}
+              className="btn btn-sm btn-secondary"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.25rem',
+                color: coords ? 'var(--primary-green)' : 'var(--accent-orange)',
+                borderColor: coords ? 'var(--primary-green)' : 'var(--accent-orange)',
+                fontWeight: 700
+              }}
+            >
+              <MapPin size={13} />
+              <span>{coords ? 'Edit on Map' : 'Locate on Map'}</span>
+            </button>
+          </div>
+
+          <div style={{
+            fontSize: '0.8rem',
+            color: 'var(--neutral-text)',
+            padding: '0.75rem',
+            backgroundColor: 'var(--neutral-white)',
+            border: '1px solid var(--neutral-border)',
+            borderRadius: 'var(--radius-md)',
+            minHeight: '40px',
+            lineHeight: 1.4
+          }}>
+            {address ? (
+              <div>
+                <strong>📍 Current Store Address:</strong>
+                <div style={{ marginTop: '0.25rem' }}>
+                  {address}
+                </div>
+                {coords && (
+                  <div style={{ fontSize: '0.7rem', color: 'var(--neutral-muted)', marginTop: '0.25rem', fontFamily: 'monospace' }}>
+                    GPS: {coords.lat.toFixed(5)}, {coords.lng.toFixed(5)}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <span style={{ color: 'var(--neutral-muted)' }}>No location selected. Tap "Locate on Map" to pick your store location.</span>
+            )}
+          </div>
+        </div>
+
+        <AddressSelector
+          isOpen={isMapOpen}
+          onClose={() => setIsMapOpen(false)}
+          onConfirm={(addrInfo) => {
+            setAddress(addrInfo.address);
+            setCoords(addrInfo.coords);
+            setDetectionSuccess(true);
+            setIsMapOpen(false);
+          }}
+          initialCoords={coords || { lat: 28.62, lng: 77.36 }}
+          initialDetails={{
+            flat: address ? address.split(', ')[0] : '',
+            locality: address ? address.substring(address.indexOf(', ') + 2) : ''
+          }}
+          title="Update Store Location"
+          confirmBtnText="Confirm Store Location"
+          hideTags={true}
+          userName={ownerName}
+          userPhone={mobile}
+        />
+
+        {/* Banner upload/select section */}
+        <div style={{ borderTop: '1px solid var(--neutral-border)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
+          <label style={{ fontSize: '0.85rem', fontWeight: 700, display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+            <span>Store Banner Design</span>
+            {image && <span style={{ color: 'var(--primary-green)', fontSize: '0.75rem', fontWeight: 700 }}>✓ Banner Set</span>}
+          </label>
+
+          {/* Banner tabs */}
+          <div style={{ display: 'flex', borderBottom: '1px solid var(--neutral-border)', marginBottom: '0.75rem', gap: '1rem' }}>
+            {[
+              { id: 'gallery', label: 'Preset Gallery', icon: Sparkles },
+              { id: 'upload', label: 'Upload Banner File', icon: Upload },
+              { id: 'url', label: 'Web Image URL', icon: ImageIcon }
+            ].map((tab) => {
+              const Icon = tab.icon;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setBannerTab(tab.id)}
+                  style={{
+                    padding: '0.5rem 0.25rem',
+                    border: 'none',
+                    background: 'none',
+                    borderBottom: bannerTab === tab.id ? '2px solid var(--primary-green)' : '2px solid transparent',
+                    color: bannerTab === tab.id ? 'var(--primary-green)' : 'var(--neutral-muted)',
+                    fontWeight: 700,
+                    fontSize: '0.8rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.3rem',
+                    transition: 'var(--transition-all)'
+                  }}
+                >
+                  <Icon size={14} />
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Preset Banners Tab */}
+          {bannerTab === 'gallery' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '0.7rem', color: 'var(--neutral-muted)', fontWeight: 600 }}>
+                  High quality banners for <strong>{category}</strong> outlets:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowAllBanners(!showAllBanners)}
+                  style={{
+                    border: 'none',
+                    background: 'none',
+                    color: 'var(--primary-green)',
+                    fontSize: '0.7rem',
+                    fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                >
+                  {showAllBanners ? 'Show Category Only' : 'Show All Banners'}
+                </button>
+              </div>
+
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))',
+                  gap: '0.5rem',
+                  maxHeight: '180px',
+                  overflowY: 'auto',
+                  padding: '0.25rem',
+                  border: '1px solid var(--neutral-border)',
+                  borderRadius: 'var(--radius-md)',
+                  backgroundColor: 'var(--neutral-light)'
+                }}
+              >
+                {(showAllBanners
+                  ? Object.values(STORE_BANNER_TEMPLATES).flat()
+                  : (STORE_BANNER_TEMPLATES[category] || STORE_BANNER_TEMPLATES['grocery'])
+                ).map((item, idx) => {
+                  const isSelected = image === item.url;
+                  return (
+                    <div
+                      key={'banner-preset-' + idx}
+                      onClick={() => setImage(item.url)}
+                      style={{
+                        border: isSelected ? '2px solid var(--primary-green)' : '1px solid var(--neutral-border)',
+                        borderRadius: 'var(--radius-md)',
+                        overflow: 'hidden',
+                        cursor: 'pointer',
+                        textAlign: 'center',
+                        backgroundColor: 'var(--neutral-white)',
+                        position: 'relative',
+                        transition: 'var(--transition-all)'
+                      }}
+                    >
+                      <img src={item.url} alt={item.name} style={{ width: '100%', height: '60px', objectFit: 'cover' }} />
+                      <span
+                        style={{
+                          fontSize: '0.62rem',
+                          display: 'block',
+                          padding: '0.15rem 0.2rem',
+                          fontWeight: 600,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        {item.name}
+                      </span>
+                      {isSelected && (
+                        <span
+                          style={{
+                            position: 'absolute',
+                            top: '2px',
+                            right: '2px',
+                            backgroundColor: 'var(--primary-green)',
+                            color: 'white',
+                            width: '14px',
+                            height: '14px',
+                            fontSize: '0.5rem',
+                            borderRadius: '50%',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontWeight: 800
+                          }}
+                        >
+                          ✓
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Upload Banner Tab */}
+          {bannerTab === 'upload' && (
+            <div style={{ marginBottom: '1rem' }}>
+              <div
+                onClick={() => bannerFileInputRef.current?.click()}
+                style={{
+                  border: '2.5px dashed var(--neutral-border)',
+                  borderRadius: 'var(--radius-lg)',
+                  padding: '1.75rem 1rem',
+                  textAlign: 'center',
+                  cursor: 'pointer',
+                  backgroundColor: 'var(--neutral-light)',
+                  transition: 'var(--transition-all)'
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.currentTarget.style.borderColor = 'var(--primary-green)';
+                }}
+                onDragLeave={(e) => {
+                  e.preventDefault();
+                  e.currentTarget.style.borderColor = 'var(--neutral-border)';
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.currentTarget.style.borderColor = 'var(--neutral-border)';
+                  const file = e.dataTransfer.files[0];
+                  if (file && file.type.startsWith('image/')) {
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                      setImage(reader.result);
+                    };
+                    reader.readAsDataURL(file);
+                  }
+                }}
+              >
+                <Upload size={28} style={{ color: 'var(--neutral-muted)', marginBottom: '0.5rem' }} />
+                <p style={{ fontSize: '0.8rem', fontWeight: 600 }}>
+                  Drag & drop banner image file here, or <span style={{ color: 'var(--primary-green)' }}>browse files</span>
+                </p>
+                <p style={{ fontSize: '0.65rem', color: 'var(--neutral-muted)', marginTop: '0.2rem' }}>
+                  Supports PNG, JPG, JPEG (processed locally)
+                </p>
+                <input
+                  type="file"
+                  ref={bannerFileInputRef}
+                  onChange={(e) => {
+                    const file = e.target.files[0];
+                    if (file) {
+                      const reader = new FileReader();
+                      reader.onloadend = () => {
+                        setImage(reader.result);
+                      };
+                      reader.readAsDataURL(file);
+                    }
+                  }}
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                />
+              </div>
+              {image && image.startsWith('data:') && (
+                <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', color: 'var(--primary-green)', fontWeight: 600 }}>
+                  <Check size={14} />
+                  <span>Custom store banner processed successfully!</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Web URL Tab */}
+          {bannerTab === 'url' && (
+            <div style={{ marginBottom: '1rem' }}>
+              <input
+                type="text"
+                required
+                value={image}
+                onChange={e => setImage(e.target.value)}
+                className="input-field"
+                placeholder="e.g. https://images.unsplash.com/..."
+              />
+            </div>
+          )}
+
+          {/* Live Preview Pane */}
+          {image && (
+            <div style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
+              <span style={{ fontSize: '0.7rem', color: 'var(--neutral-muted)', fontWeight: 700, display: 'block', marginBottom: '0.4rem' }}>
+                Banner Live Preview:
+              </span>
+              <div style={{
+                position: 'relative',
+                width: '100%',
+                height: '130px',
+                borderRadius: 'var(--radius-xl)',
+                overflow: 'hidden',
+                border: '1.5px solid var(--neutral-border)',
+                boxShadow: 'var(--shadow-md)'
+              }}>
+                <img src={image} alt="Store Banner Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                <div style={{
+                  position: 'absolute',
+                  bottom: '0',
+                  left: '0',
+                  right: '0',
+                  padding: '1rem',
+                  background: 'linear-gradient(0deg, rgba(0,0,0,0.7) 0%, transparent 100%)',
+                  color: 'white',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'flex-end'
+                }}>
+                  <h4 style={{ fontSize: '1.15rem', fontWeight: 900, textShadow: '0 2px 4px rgba(0,0,0,0.6)', margin: 0 }}>
+                    {storeName || 'Store Name'}
+                  </h4>
+                  <p style={{ fontSize: '0.75rem', textShadow: '0 1px 2px rgba(0,0,0,0.6)', opacity: 0.9, marginTop: '0.15rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    📍 {address || 'Store Address'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <button type="submit" className="btn btn-primary" style={{ width: 'fit-content', fontWeight: 700, padding: '0.6rem 1.5rem', marginTop: '0.5rem' }}>
+          Save Store Changes
+        </button>
+      </form>
     </div>
   );
 };

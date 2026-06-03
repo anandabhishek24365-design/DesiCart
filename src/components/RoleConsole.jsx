@@ -227,6 +227,24 @@ export const RoleConsole = () => {
                 </span>
               )}
             </button>
+
+            {/* Super Admin Button */}
+            <button
+              onClick={() => {
+                setActiveRole('superadmin');
+                setIsLoggedIn(true);
+              }}
+              className={`btn btn-sm ${activeRole === 'superadmin' ? 'btn-primary' : 'btn-secondary'}`}
+              style={{
+                justifyContent: 'flex-start',
+                gap: '0.4rem',
+                border: activeRole === 'superadmin' ? 'none' : '1px solid var(--neutral-border)',
+                gridColumn: 'span 2'
+              }}
+            >
+              <ShieldCheck size={15} style={{ color: '#fbbf24' }} />
+              <span>👑 Super Admin</span>
+            </button>
           </div>
 
           {/* Quick Context Switchers */}

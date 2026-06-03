@@ -1,7 +1,8 @@
 import React, { useContext, useState, useEffect } from 'react';
 import { AppContext } from '../context/AppContext';
 import { MapMock } from '../components/MapMock';
-import { INITIAL_CATEGORIES, BANNER_SLIDES } from '../data/initialData';
+import { AddressSelector } from '../components/AddressSelector';
+import { INITIAL_CATEGORIES, BANNER_SLIDES, MOCK_LOCATIONS } from '../data/initialData';
 import {
   Search,
   ShoppingBag,
@@ -23,6 +24,7 @@ import {
   Sun,
   Award,
   AlertCircle,
+  AlertTriangle,
   LogOut
 } from 'lucide-react';
 
@@ -46,7 +48,19 @@ export const CustomerView = () => {
     globalCoords,
     globalAddress,
     isGpsActive,
-    requestGlobalGPS
+    requestGlobalGPS,
+    getDistanceToStore,
+    setGlobalLocation,
+    firebaseUser,
+    savedAddresses,
+    savedPayments,
+    addCustomerAddress,
+    deleteCustomerAddress,
+    setDefaultAddress,
+    addCustomerPayment,
+    deleteCustomerPayment,
+    updateCustomerProfile,
+    submitComplaint
   } = useContext(AppContext);
 
   // Sub-navigation state
@@ -66,6 +80,7 @@ export const CustomerView = () => {
   const [address, setAddress] = useState(globalAddress);
   const [paymentMethod, setPaymentMethod] = useState('upi');
   const [couponCodeInput, setCouponCodeInput] = useState('');
+  const [isCheckoutAddressModalOpen, setIsCheckoutAddressModalOpen] = useState(false);
 
   // Sync checkout address when globalAddress loads/changes
   useEffect(() => {
@@ -86,9 +101,13 @@ export const CustomerView = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // Filter approved vendors based on selected category & search
+  // Filter approved vendors based on selected category, search & 15 km distance radius
   const filteredVendors = vendors.filter((v) => {
     if (!v.isApproved) return false;
+
+    // Filter out stores that are further than 15 km away
+    const dist = getDistanceToStore(v.coords);
+    if (dist === null || dist > 15) return false;
     
     const matchesCategory = selectedCategory === 'all' || v.category === selectedCategory;
     const matchesSearch = v.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
@@ -96,30 +115,40 @@ export const CustomerView = () => {
     
     return matchesCategory && matchesSearch;
   }).sort((a, b) => {
+    const distA = getDistanceToStore(a.coords) || 999;
+    const distB = getDistanceToStore(b.coords) || 999;
+
     if (filterRating) return b.rating - a.rating;
     if (filterFastest) {
       const timeA = parseInt(a.deliveryTime.split('-')[0]) || 99;
       const timeB = parseInt(b.deliveryTime.split('-')[0]) || 99;
       return timeA - timeB;
     }
-    return 0;
+    // Default sorting: nearest distance first
+    return distA - distB;
   });
+
+  const anyStoresInRange = vendors.some(v => v.isApproved && getDistanceToStore(v.coords) <= 15);
 
   const selectedVendor = vendors.find((v) => v.id === selectedVendorId);
   const selectedVendorProducts = products.filter((p) => p.vendorId === selectedVendorId);
 
   const getMockDistance = (vendorId) => {
-    if (globalCoords) {
-      const charCodeSum = vendorId.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
-      const seed = Math.abs(Math.sin(globalCoords.lat) * charCodeSum);
-      return (0.3 + (seed % 4.5)).toFixed(1) + ' km';
+    const vendor = vendors.find(v => v.id === vendorId);
+    if (vendor && vendor.coords) {
+      const dist = getDistanceToStore(vendor.coords);
+      return dist !== null ? `${dist.toFixed(1)} km away` : '1.2 km';
     }
-    const distances = { vendor_1: '0.9 km', vendor_2: '1.4 km', vendor_3: '2.1 km', vendor_4: '1.8 km', vendor_5: '3.2 km' };
-    return distances[vendorId] || '2.5 km';
+    return '1.2 km';
   };
 
   // Active tracking order derived
   const trackingOrder = orders.find((o) => o.id === activeTrackingOrderId);
+
+  // Cart active store and distance validation
+  const activeCartStore = cart.items.length > 0 ? vendors.find(v => v.id === cart.items[0].vendorId) : null;
+  const cartStoreDistance = activeCartStore ? getDistanceToStore(activeCartStore.coords) : null;
+  const isCartStoreTooFar = cartStoreDistance !== null && cartStoreDistance > 15;
 
   // Handle store clicks
   const handleVendorSelect = (vendorId) => {
@@ -191,28 +220,75 @@ export const CustomerView = () => {
           </div>
 
           {/* Quick Location Mock (GPS Interactive) */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.85rem', color: 'var(--neutral-muted)', fontWeight: 600 }}>
-            <MapPin size={16} style={{ color: 'var(--accent-orange)' }} />
-            <span style={{ maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={globalAddress}>
-              {globalAddress}
-            </span>
-            <button
-              onClick={requestGlobalGPS}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--neutral-muted)', fontWeight: 600 }}>
+            <MapPin size={15} style={{ color: 'var(--accent-orange)' }} />
+            <select
+              value={globalAddress}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === 'gps') {
+                  requestGlobalGPS();
+                } else {
+                  // Try to find in MOCK_LOCATIONS first
+                  const matchedMock = MOCK_LOCATIONS.find(loc => loc.address === val);
+                  if (matchedMock) {
+                    setGlobalLocation(matchedMock.address, matchedMock.coords);
+                  } else {
+                    // Try to find in savedAddresses
+                    const matchedSaved = savedAddresses.find(addr => addr.address === val);
+                    if (matchedSaved) {
+                      // Map to standard coordinates if we recognize Noida/Gurugram, otherwise default Noida
+                      let coords = { lat: 28.62, lng: 77.36 };
+                      if (val.toLowerCase().includes('cybercity') || val.toLowerCase().includes('gurugram')) {
+                        coords = { lat: 28.495, lng: 77.088 };
+                      }
+                      setGlobalLocation(matchedSaved.address, coords);
+                    }
+                  }
+                }
+              }}
               style={{
-                background: 'var(--primary-green-light)',
-                border: '1px solid var(--primary-green)',
-                color: 'var(--primary-green-hover)',
-                fontSize: '0.7rem',
-                fontWeight: 700,
-                borderRadius: 'var(--radius-sm)',
-                padding: '0.15rem 0.4rem',
-                marginLeft: '0.25rem',
+                background: 'transparent',
+                border: 'none',
+                borderBottom: '1.5px dashed var(--accent-orange)',
+                fontWeight: 800,
+                color: 'var(--neutral-text)',
                 cursor: 'pointer',
-                fontFamily: 'var(--font-sans)'
+                fontSize: '0.82rem',
+                outline: 'none',
+                maxWidth: '200px',
+                padding: '0.1rem 0'
               }}
             >
-              Auto-detect
-            </button>
+              <option value="" disabled>-- Select Location --</option>
+              <option value="gps">📡 Auto-Detect GPS Location</option>
+              
+              {!MOCK_LOCATIONS.some(loc => loc.address === globalAddress) && 
+               !savedAddresses.some(addr => addr.address === globalAddress) && 
+               globalAddress !== "" && globalAddress !== "gps" && (
+                <option value={globalAddress}>
+                  📍 {globalAddress.length > 25 ? globalAddress.slice(0, 25) + '...' : globalAddress}
+                </option>
+              )}
+
+              <optgroup label="Predefined Locations">
+                {MOCK_LOCATIONS.map((loc) => (
+                  <option key={loc.address} value={loc.address}>
+                    {loc.name.split(' (')[0]}
+                  </option>
+                ))}
+              </optgroup>
+
+              {savedAddresses.length > 0 && (
+                <optgroup label="Saved Addresses">
+                  {savedAddresses.map((addr) => (
+                    <option key={addr.id} value={addr.address}>
+                      🏠 {addr.tag}: {addr.address}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
           </div>
 
           {/* Tabs Menu */}
@@ -234,6 +310,12 @@ export const CustomerView = () => {
               className={`btn btn-sm ${activeTab === 'wishlist' ? 'btn-primary' : 'btn-ghost'}`}
             >
               Wishlist ({wishlist.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('account')}
+              className={`btn btn-sm ${activeTab === 'account' ? 'btn-primary' : 'btn-ghost'}`}
+            >
+              Account
             </button>
 
             {/* Dark Mode toggle */}
@@ -468,11 +550,16 @@ export const CustomerView = () => {
             </div>
 
             {filteredVendors.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '3rem 1rem', border: '1px dashed var(--neutral-border)', borderRadius: 'var(--radius-xl)' }}>
-                <AlertCircle size={40} style={{ color: 'var(--neutral-muted)', marginBottom: '0.75rem' }} />
-                <h4 style={{ fontWeight: 700 }}>No Outlets Match Filter</h4>
-                <p style={{ fontSize: '0.85rem', color: 'var(--neutral-muted)', marginTop: '0.25rem' }}>
-                  Try removing search keywords or filters to discover local shops.
+              <div style={{ textAlign: 'center', padding: '4rem 1rem', border: '2px dashed var(--neutral-border)', borderRadius: 'var(--radius-xl)', backgroundColor: 'var(--neutral-light)' }}>
+                <AlertCircle size={44} style={{ color: 'var(--accent-orange)', marginBottom: '0.75rem' }} />
+                <h4 style={{ fontWeight: 800, color: 'var(--neutral-text)' }}>
+                  {!anyStoresInRange ? 'No stores are available in your area.' : 'No Outlets Match Filter'}
+                </h4>
+                <p style={{ fontSize: '0.85rem', color: 'var(--neutral-muted)', marginTop: '0.35rem', maxWidth: '360px', margin: '0.35rem auto 0', lineHeight: 1.5 }}>
+                  {!anyStoresInRange 
+                    ? 'All registered shops exceed the 15 km service radius. Please try selecting a different location from the header.'
+                    : 'Try removing search keywords or filters to discover local shops.'
+                  }
                 </p>
               </div>
             ) : (
@@ -574,17 +661,36 @@ export const CustomerView = () => {
         )}
 
         {/* VIEW 2: STORE DETAIL MENU */}
-        {activeTab === 'store-detail' && selectedVendor && (
-          <div>
-            {/* Back button */}
-            <button
-              onClick={handleBackToStores}
-              className="btn btn-ghost"
-              style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.25rem 0', marginBottom: '1rem', fontSize: '0.9rem', color: 'var(--primary-green)', fontWeight: 700 }}
-            >
-              <ArrowLeft size={16} />
-              <span>Back to Outlets</span>
-            </button>
+        {activeTab === 'store-detail' && selectedVendor && (() => {
+          const dist = getDistanceToStore(selectedVendor.coords);
+          const isTooFar = dist !== null && dist > 15;
+          if (isTooFar) {
+            return (
+              <div style={{ padding: '3.5rem 1rem', textAlign: 'center', maxWidth: '500px', margin: '2rem auto' }} className="card animate-fade-in">
+                <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: '#fee2e2', color: '#ef4444', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.25rem', boxShadow: '0 0 0 8px rgba(254, 202, 202, 0.5)' }}>
+                  <AlertTriangle size={32} />
+                </div>
+                <h3 style={{ fontSize: '1.25rem', fontWeight: 900, color: '#b91c1c', marginBottom: '0.5rem' }}>Out of Service Area</h3>
+                <p style={{ fontSize: '0.88rem', color: 'var(--neutral-muted)', marginTop: '0.5rem', lineHeight: 1.5, fontWeight: 600 }}>
+                  <strong>{selectedVendor.name}</strong> is located <strong>{dist.toFixed(1)} km</strong> away, which exceeds our maximum delivery radius of <strong>15 km</strong> from your current location.
+                </p>
+                <button className="btn btn-primary" onClick={handleBackToStores} style={{ marginTop: '1.5rem', fontWeight: 700 }}>
+                  Back to Nearby Stores
+                </button>
+              </div>
+            );
+          }
+          return (
+            <div>
+              {/* Back button */}
+              <button
+                onClick={handleBackToStores}
+                className="btn btn-ghost"
+                style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.25rem 0', marginBottom: '1rem', fontSize: '0.9rem', color: 'var(--primary-green)', fontWeight: 700 }}
+              >
+                <ArrowLeft size={16} />
+                <span>Back to Outlets</span>
+              </button>
 
             {/* Store Cover Banner */}
             <div className="card animate-fade-in" style={{ padding: 0, overflow: 'hidden', marginBottom: '2rem' }}>
@@ -770,7 +876,7 @@ export const CustomerView = () => {
               </div>
             )}
           </div>
-        )}
+        )})()}
 
         {/* VIEW 3: CART & CHECKOUT PAGE */}
         {activeTab === 'cart' && (
@@ -916,29 +1022,78 @@ export const CustomerView = () => {
                       </div>
                     </div>
 
+                    {isCartStoreTooFar && (
+                      <div style={{
+                        padding: '0.75rem 1rem',
+                        backgroundColor: '#fee2e2',
+                        border: '1px solid #fca5a5',
+                        borderRadius: 'var(--radius-lg)',
+                        color: '#b91c1c',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        marginBottom: '1rem'
+                      }}>
+                        <AlertTriangle size={16} />
+                        <span>Store out of range ({cartStoreDistance?.toFixed(1)} km away). Change address or clear cart to checkout.</span>
+                      </div>
+                    )}
+
                     <button
-                      onClick={() => setCheckoutStep(2)}
+                      onClick={() => !isCartStoreTooFar && setCheckoutStep(2)}
+                      disabled={isCartStoreTooFar}
                       className="btn btn-orange"
-                      style={{ width: '100%', fontSize: '1rem', padding: '1rem' }}
+                      style={{
+                        width: '100%',
+                        fontSize: '1rem',
+                        padding: '1rem',
+                        opacity: isCartStoreTooFar ? 0.6 : 1,
+                        cursor: isCartStoreTooFar ? 'not-allowed' : 'pointer'
+                      }}
                     >
-                      Proceed to Checkout
+                      {isCartStoreTooFar ? 'Out of Delivery Range' : 'Proceed to Checkout'}
                     </button>
                   </div>
                 ) : (
                   /* Step 2: Address & Payment Info */
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }} className="animate-fade-in">
-                    <div className="card">
-                      <h4 style={{ fontWeight: 800, fontSize: '0.95rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                        <MapPin size={16} style={{ color: 'var(--primary-green)' }} />
-                        <span>Delivery Destination Address</span>
-                      </h4>
-                      <textarea
-                        value={address}
-                        onChange={(e) => setAddress(e.target.value)}
-                        className="input-field"
-                        rows="3"
-                        placeholder="Complete details (House no, Street name, Pincode)"
-                      />
+                    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <h4 style={{ fontWeight: 800, fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                          <MapPin size={16} style={{ color: 'var(--primary-green)' }} />
+                          <span>Delivery Address Details</span>
+                        </h4>
+                        <button
+                          type="button"
+                          onClick={() => setIsCheckoutAddressModalOpen(true)}
+                          className="btn btn-sm btn-secondary"
+                          style={{ color: 'var(--primary-green)', borderColor: 'var(--primary-green)', fontWeight: 700 }}
+                        >
+                          Change on Map
+                        </button>
+                      </div>
+
+                      <div style={{
+                        padding: '1rem',
+                        backgroundColor: 'var(--neutral-light)',
+                        border: '1px solid var(--neutral-border)',
+                        borderRadius: 'var(--radius-lg)',
+                        fontSize: '0.85rem'
+                      }}>
+                        <div style={{ fontWeight: 700, color: 'var(--neutral-text)', marginBottom: '0.25rem' }}>
+                          📍 Current Destination:
+                        </div>
+                        <div style={{ color: 'var(--neutral-text)', lineHeight: 1.4 }}>
+                          {address || 'No address selected. Please use the map to set a precise delivery address.'}
+                        </div>
+                        {globalCoords && (
+                          <div style={{ fontSize: '0.72rem', color: 'var(--neutral-muted)', marginTop: '0.4rem', fontFamily: 'monospace' }}>
+                            GPS: {globalCoords.lat.toFixed(5)}, {globalCoords.lng.toFixed(5)}
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     <div className="card">
@@ -966,8 +1121,19 @@ export const CustomerView = () => {
                       <button onClick={() => setCheckoutStep(1)} className="btn btn-secondary" style={{ flex: 1 }}>
                         Back
                       </button>
-                      <button onClick={handlePlaceOrder} className="btn btn-orange" style={{ flex: 2, padding: '1rem', fontSize: '1rem' }}>
-                        Place Order (₹{cart.total})
+                      <button
+                        onClick={handlePlaceOrder}
+                        disabled={isCartStoreTooFar}
+                        className="btn btn-orange"
+                        style={{
+                          flex: 2,
+                          padding: '1rem',
+                          fontSize: '1rem',
+                          opacity: isCartStoreTooFar ? 0.6 : 1,
+                          cursor: isCartStoreTooFar ? 'not-allowed' : 'pointer'
+                        }}
+                      >
+                        {isCartStoreTooFar ? 'Out of Delivery Range' : `Place Order (₹${cart.total})`}
                       </button>
                     </div>
                   </div>
@@ -1261,7 +1427,378 @@ export const CustomerView = () => {
             )}
           </div>
         )}
+
+        {/* VIEW 7: ACCOUNT MANAGER */}
+        {activeTab === 'account' && (
+          <AccountView
+            firebaseUser={firebaseUser}
+            savedAddresses={savedAddresses}
+            savedPayments={savedPayments}
+            addCustomerAddress={addCustomerAddress}
+            deleteCustomerAddress={deleteCustomerAddress}
+            setDefaultAddress={setDefaultAddress}
+            addCustomerPayment={addCustomerPayment}
+            deleteCustomerPayment={deleteCustomerPayment}
+            updateCustomerProfile={updateCustomerProfile}
+            submitComplaint={submitComplaint}
+          />
+        )}
+        <AddressSelector
+          isOpen={isCheckoutAddressModalOpen}
+          onClose={() => setIsCheckoutAddressModalOpen(false)}
+          onConfirm={(addrInfo) => {
+            setAddress(addrInfo.address);
+            setGlobalLocation(addrInfo.address, addrInfo.coords);
+            setIsCheckoutAddressModalOpen(false);
+          }}
+          initialCoords={globalCoords}
+          initialDetails={{
+            locality: globalAddress
+          }}
+          userName={firebaseUser?.displayName || 'ABHISHEK ANAND'}
+          userPhone={firebaseUser?.phoneNumber || ''}
+        />
       </div>
     </div>
   );
 };
+
+/* ─── Premium Account/Profile Component ─── */
+const AccountView = ({
+  firebaseUser,
+  savedAddresses,
+  savedPayments,
+  addCustomerAddress,
+  deleteCustomerAddress,
+  setDefaultAddress,
+  addCustomerPayment,
+  deleteCustomerPayment,
+  updateCustomerProfile,
+  submitComplaint
+}) => {
+  const [subTab, setSubTab] = useState('profile');
+  const [isMapOpen, setIsMapOpen] = useState(false);
+
+  // Profile forms state
+  const [editName, setEditName] = useState(firebaseUser?.displayName || 'Jane Doe');
+  
+  // Complaint form state
+  const [subject, setSubject] = useState('');
+  const [message, setMessage] = useState('');
+
+  // Address form state
+  const [newAddress, setNewAddress] = useState('');
+  const [addressTag, setAddressTag] = useState('Home');
+
+  // Payment form state
+  const [payType, setPayType] = useState('upi');
+  const [payDetail, setPayDetail] = useState('');
+  const [payProvider, setPayProvider] = useState('Google Pay');
+
+  const handleUpdateName = (e) => {
+    e.preventDefault();
+    updateCustomerProfile(editName);
+  };
+
+  const handleComplaintSubmit = (e) => {
+    e.preventDefault();
+    if (!subject || !message) return;
+    submitComplaint(subject, message);
+    setSubject('');
+    setMessage('');
+  };
+
+  const handleAddAddress = (e) => {
+    e.preventDefault();
+    if (!newAddress.trim()) return;
+    addCustomerAddress(newAddress.trim(), addressTag);
+    setNewAddress('');
+  };
+
+  const handleAddPayment = (e) => {
+    e.preventDefault();
+    if (!payDetail.trim()) return;
+    addCustomerPayment(payType, payDetail.trim(), payProvider);
+    setPayDetail('');
+  };
+
+  return (
+    <div className="card" style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: '2rem', padding: '1.5rem', flexWrap: 'wrap' }}>
+      
+      {/* Sidebar navigation */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', borderRight: '1px solid var(--neutral-border)', paddingRight: '1rem' }}>
+        {[
+          { id: 'profile', label: 'My Profile' },
+          { id: 'addresses', label: 'Manage Addresses' },
+          { id: 'payments', label: 'Manage Payments' }
+        ].map(item => (
+          <button
+            key={item.id}
+            onClick={() => setSubTab(item.id)}
+            className={`btn btn-sm ${subTab === item.id ? 'btn-primary' : 'btn-ghost'}`}
+            style={{
+              justifyContent: 'flex-start',
+              fontWeight: 700,
+              color: subTab === item.id ? '#fff' : 'var(--neutral-text)',
+              backgroundColor: subTab === item.id ? 'var(--primary-green)' : 'transparent',
+              borderRadius: 'var(--radius-md)'
+            }}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Main pane content */}
+      <div className="animate-fade-in" style={{ flex: 1 }}>
+        {/* SUBTAB: PROFILE */}
+        {subTab === 'profile' && (
+          <div>
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 800, marginBottom: '1.15rem' }}>Personal Profile Info</h3>
+            
+            <form onSubmit={handleUpdateName} style={{ display: 'flex', flexDirection: 'column', gap: '1rem', maxWidth: '400px', marginBottom: '2rem' }}>
+              <div>
+                <label style={{ fontSize: '0.78rem', fontWeight: 700, display: 'block', marginBottom: '0.35rem' }}>Your Full Name</label>
+                <input
+                  type="text"
+                  required
+                  value={editName}
+                  onChange={e => setEditName(e.target.value)}
+                  className="input-field"
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: '0.78rem', fontWeight: 700, display: 'block', marginBottom: '0.35rem' }}>Email Address</label>
+                <input
+                  type="email"
+                  disabled
+                  value={firebaseUser?.email || 'customer@desicart.com'}
+                  className="input-field"
+                  style={{ backgroundColor: 'var(--neutral-light)', cursor: 'not-allowed' }}
+                />
+                <span style={{ fontSize: '0.65rem', color: 'var(--neutral-muted)' }}>Email is verified and cannot be edited.</span>
+              </div>
+              <button type="submit" className="btn btn-primary" style={{ width: 'fit-content' }}>Save Changes</button>
+            </form>
+
+            <hr style={{ border: 'none', borderTop: '1px solid var(--neutral-border)', margin: '1.5rem 0' }} />
+
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 800, marginBottom: '0.5rem' }}>Submit a Complaint / Help Query</h3>
+            <p style={{ fontSize: '0.75rem', color: 'var(--neutral-muted)', marginBottom: '1rem' }}>
+              Have an issue with a recent delivery or order? Reach out to support.
+            </p>
+            <form onSubmit={handleComplaintSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', maxWidth: '500px' }}>
+              <div>
+                <label style={{ fontSize: '0.75rem', fontWeight: 700, display: 'block', marginBottom: '0.35rem' }}>Subject</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="E.g. Missing items in order, damaged packaging..."
+                  value={subject}
+                  onChange={e => setSubject(e.target.value)}
+                  className="input-field"
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: '0.75rem', fontWeight: 700, display: 'block', marginBottom: '0.35rem' }}>Message</label>
+                <textarea
+                  required
+                  rows={3}
+                  placeholder="Detail what happened and what solution you require..."
+                  value={message}
+                  onChange={e => setMessage(e.target.value)}
+                  className="input-field"
+                  style={{ resize: 'vertical' }}
+                />
+              </div>
+              <button type="submit" className="btn btn-orange" style={{ width: 'fit-content' }}>Submit Help Ticket</button>
+            </form>
+          </div>
+        )}
+
+        {/* SUBTAB: ADDRESSES */}
+        {subTab === 'addresses' && (
+          <div>
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 800, marginBottom: '1rem' }}>Manage Delivery Addresses</h3>
+
+            {/* List saved addresses */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '2rem' }}>
+              {savedAddresses.length === 0 ? (
+                <p style={{ fontSize: '0.82rem', color: 'var(--neutral-muted)' }}>No saved addresses. Add one below.</p>
+              ) : (
+                savedAddresses.map((addr) => (
+                  <div key={addr.id} style={{
+                    padding: '0.75rem 1rem',
+                    border: `1.5px solid ${addr.isDefault ? 'var(--primary-green)' : 'var(--neutral-border)'}`,
+                    borderRadius: 'var(--radius-lg)',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    backgroundColor: addr.isDefault ? 'var(--primary-green-light)' : 'var(--neutral-white)'
+                  }}>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <span style={{ fontWeight: 800, fontSize: '0.88rem' }}>{addr.tag}</span>
+                        {addr.isDefault && <span className="badge badge-delivered" style={{ fontSize: '0.65rem' }}>Default</span>}
+                      </div>
+                      <p style={{ fontSize: '0.8rem', color: 'var(--neutral-text)', marginTop: '0.15rem' }}>{addr.address}</p>
+                    </div>
+                    
+                    <div style={{ display: 'flex', gap: '0.4rem' }}>
+                      {!addr.isDefault && (
+                        <button
+                          onClick={() => setDefaultAddress(addr.id)}
+                          className="btn btn-sm btn-ghost"
+                          style={{ color: 'var(--primary-green)', fontSize: '0.72rem', fontWeight: 700 }}
+                        >
+                          Set Default
+                        </button>
+                      )}
+                      <button
+                        onClick={() => deleteCustomerAddress(addr.id)}
+                        className="btn btn-sm btn-ghost"
+                        style={{ color: '#ef4444' }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <hr style={{ border: 'none', borderTop: '1px solid var(--neutral-border)', margin: '1.5rem 0' }} />
+
+            {/* Add Address Form */}
+            <h3 style={{ fontSize: '1rem', fontWeight: 800, marginBottom: '0.85rem' }}>Add New Address</h3>
+            <div style={{ padding: '1.5rem', border: '1px dashed var(--neutral-border)', borderRadius: 'var(--radius-lg)', textAlign: 'center', backgroundColor: 'var(--neutral-light)' }}>
+              <button
+                type="button"
+                onClick={() => setIsMapOpen(true)}
+                className="btn btn-primary"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+              >
+                <Plus size={16} />
+                <span>Locate & Add Address via Map</span>
+              </button>
+              <p style={{ fontSize: '0.75rem', color: 'var(--neutral-muted)', marginTop: '0.5rem' }}>
+                Use our interactive geocoded map selector to save a highly accurate home or office address.
+              </p>
+            </div>
+
+            <AddressSelector
+              isOpen={isMapOpen}
+              onClose={() => setIsMapOpen(false)}
+              onConfirm={(addrInfo) => {
+                addCustomerAddress(addrInfo.address, addrInfo.tag);
+                setIsMapOpen(false);
+              }}
+              userName={firebaseUser?.displayName || 'Jane Doe'}
+              userPhone={firebaseUser?.phoneNumber || ''}
+            />
+          </div>
+        )}
+
+        {/* SUBTAB: PAYMENTS */}
+        {subTab === 'payments' && (
+          <div>
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 800, marginBottom: '1rem' }}>Saved Payout Accounts</h3>
+
+            {/* List saved payments */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '2rem' }}>
+              {savedPayments.length === 0 ? (
+                <p style={{ fontSize: '0.82rem', color: 'var(--neutral-muted)' }}>No saved payment methods. Add one below.</p>
+              ) : (
+                savedPayments.map((pay) => (
+                  <div key={pay.id} style={{
+                    padding: '0.75rem 1rem',
+                    border: '1px solid var(--neutral-border)',
+                    borderRadius: 'var(--radius-lg)',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    backgroundColor: 'var(--neutral-light)'
+                  }}>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <span style={{ fontWeight: 800, fontSize: '0.88rem', textTransform: 'uppercase' }}>
+                          {pay.type === 'upi' ? 'UPI Account' : 'Payment Card'}
+                        </span>
+                        <span className="badge badge-pending" style={{ fontSize: '0.65rem' }}>{pay.provider}</span>
+                      </div>
+                      <p style={{ fontSize: '0.85rem', color: 'var(--neutral-text)', fontFamily: 'monospace', marginTop: '0.2rem' }}>
+                        {pay.detail}
+                      </p>
+                    </div>
+                    
+                    <button
+                      onClick={() => deleteCustomerPayment(pay.id)}
+                      className="btn btn-sm btn-ghost"
+                      style={{ color: '#ef4444' }}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <hr style={{ border: 'none', borderTop: '1px solid var(--neutral-border)', margin: '1.5rem 0' }} />
+
+            {/* Add Payment Form */}
+            <h3 style={{ fontSize: '1rem', fontWeight: 800, marginBottom: '0.85rem' }}>Save Payment Credentials</h3>
+            <form onSubmit={handleAddPayment} style={{ display: 'flex', gap: '0.85rem', flexWrap: 'wrap', alignItems: 'end' }}>
+              <div>
+                <label style={{ fontSize: '0.75rem', fontWeight: 700, display: 'block', marginBottom: '0.35rem' }}>Payment Type</label>
+                <select
+                  value={payType}
+                  onChange={e => {
+                    setPayType(e.target.value);
+                    if (e.target.value === 'upi') {
+                      setPayDetail('');
+                      setPayProvider('Google Pay');
+                    } else {
+                      setPayDetail('');
+                      setPayProvider('Visa');
+                    }
+                  }}
+                  className="input-field"
+                  style={{ width: '100px', padding: '0 0.5rem', height: '38px' }}
+                >
+                  <option value="upi">UPI ID</option>
+                  <option value="card">Card</option>
+                </select>
+              </div>
+              <div style={{ flex: 1, minWidth: '180px' }}>
+                <label style={{ fontSize: '0.75rem', fontWeight: 700, display: 'block', marginBottom: '0.35rem' }}>
+                  {payType === 'upi' ? 'UPI Virtual Address (e.g. name@upi)' : 'Card Number (e.g. VISA 16-digits)'}
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder={payType === 'upi' ? 'username@upi' : '4111 2222 3333 4444'}
+                  value={payDetail}
+                  onChange={e => setPayDetail(e.target.value)}
+                  className="input-field"
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: '0.75rem', fontWeight: 700, display: 'block', marginBottom: '0.35rem' }}>Provider</label>
+                <input
+                  type="text"
+                  required
+                  value={payProvider}
+                  onChange={e => setPayProvider(e.target.value)}
+                  className="input-field"
+                  style={{ width: '110px' }}
+                />
+              </div>
+              <button type="submit" className="btn btn-primary" style={{ height: '38px' }}>Save Method</button>
+            </form>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
