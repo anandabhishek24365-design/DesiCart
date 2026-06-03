@@ -5,6 +5,7 @@ import { VendorDashboard } from './views/VendorDashboard';
 import { AdminDashboard } from './views/AdminDashboard';
 import { DeliveryDashboard } from './views/DeliveryDashboard';
 import { LoginView } from './views/LoginView';
+import { RoleConsole } from './components/RoleConsole';
 import { Bell, Info, AlertTriangle, AlertCircle } from 'lucide-react';
 
 const AppContent = () => {
@@ -68,6 +69,9 @@ const AppContent = () => {
           </>
         )}
       </main>
+
+      {/* Development Debug Role Console Switcher */}
+      <RoleConsole />
 
       {/* Shared Footer */}
       <footer
