@@ -9,7 +9,7 @@ import { StoreRegistrationView } from './views/StoreRegistrationView';
 import { RiderRegistrationView } from './views/RiderRegistrationView';
 import { PendingApprovalView } from './views/PendingApprovalView';
 import { RejectionView } from './views/RejectionView';
-import { RoleConsole } from './components/RoleConsole';
+
 import { SuperAdminDashboard } from './views/SuperAdminDashboard';
 import { Bell, Info, AlertTriangle, AlertCircle, ShieldAlert, LogOut, ArrowLeft } from 'lucide-react';
 
@@ -240,8 +240,6 @@ const AppContent = () => {
         )}
       </main>
 
-      {/* Development Debug Role Console Switcher */}
-      <RoleConsole />
 
       {/* Shared Footer */}
       <footer
