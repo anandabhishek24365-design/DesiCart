@@ -5,7 +5,7 @@ import {
   INITIAL_COUPONS,
   INITIAL_DELIVERY_PARTNERS
 } from '../data/initialData';
-import { auth, isFirebaseEnabled } from '../firebase';
+import { auth, isFirebaseEnabled, getRedirectResult } from '../firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 
 export const AppContext = createContext();
