@@ -113,7 +113,8 @@ export const LoginView = () => {
       }
       handleSuccess(result.user, null, role);
     } catch (err) {
-      setError(friendlyError(err.code));
+      console.error("Email Sign-In Error:", err);
+      setError(`${friendlyError(err.code)} (Code: ${err.code || 'unknown'})`);
     } finally {
       setIsLoading(false);
     }
@@ -145,7 +146,8 @@ export const LoginView = () => {
       }
       handleSuccess(result.user, displayName.trim(), role);
     } catch (err) {
-      setError(friendlyError(err.code));
+      console.error("Email Sign-Up Error:", err);
+      setError(`${friendlyError(err.code)} (Code: ${err.code || 'unknown'})`);
     } finally {
       setIsLoading(false);
     }
@@ -173,7 +175,8 @@ export const LoginView = () => {
 
       handleSuccess(result.user, null, role);
     } catch (err) {
-      setError(friendlyError(err.code));
+      console.error("Google Sign-In Error:", err);
+      setError(`${friendlyError(err.code)} (Code: ${err.code || 'unknown'})`);
     } finally {
       setIsLoading(false);
     }
