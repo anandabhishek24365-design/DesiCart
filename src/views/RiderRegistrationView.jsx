@@ -1,8 +1,8 @@
-import React, { useContext, useState } from 'react';
+import React, { useContext, useState, useEffect } from 'react';
 import { AppContext } from '../context/AppContext';
 import {
   Bike, User, Phone, Car, FileText,
-  CheckCircle2, AlertCircle, Loader2, ArrowRight, LogOut, ChevronDown
+  CheckCircle2, AlertCircle, Loader2, ArrowRight, LogOut, ChevronDown, Mail
 } from 'lucide-react';
 
 const VEHICLE_TYPES = [
@@ -15,10 +15,10 @@ const VEHICLE_TYPES = [
 ];
 
 export const RiderRegistrationView = () => {
-  const { submitRiderRegistration, logout } = useContext(AppContext);
+  const { firebaseUser, submitRiderRegistration, logout } = useContext(AppContext);
 
   const [form, setForm] = useState({
-    riderName: '', mobile: '', vehicleNumber: '',
+    riderName: '', mobile: '', email: firebaseUser?.email || '', vehicleNumber: '',
     vehicleType: 'bike', licenseNumber: '',
   });
   const [errors, setErrors] = useState({});
@@ -30,12 +30,22 @@ export const RiderRegistrationView = () => {
     setErrors(er => ({ ...er, [field]: '' }));
   };
 
+  // Prefill email if logged in with Firebase Google auth
+  useEffect(() => {
+    if (firebaseUser?.email) {
+      setForm(f => ({ ...f, email: firebaseUser.email }));
+    }
+  }, [firebaseUser]);
+
   const validate = () => {
     const errs = {};
     if (!form.riderName.trim())     errs.riderName     = 'Full name is required.';
     if (!form.mobile.trim())        errs.mobile        = 'Mobile number is required.';
     else if (!/^[6-9]\d{9}$/.test(form.mobile.replace(/\s+/g, '').replace('+91', '')))
       errs.mobile = 'Enter a valid 10-digit Indian mobile number.';
+    if (!form.email.trim())         errs.email         = 'Email address is required.';
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim()))
+      errs.email = 'Enter a valid email address.';
     if (!form.vehicleNumber.trim()) errs.vehicleNumber = 'Vehicle registration number is required.';
     else if (!/^[A-Z]{2}\s?\d{2}\s?[A-Z]{1,2}\s?\d{4}$/i.test(form.vehicleNumber.trim()))
       errs.vehicleNumber = 'Enter a valid vehicle number (e.g. DL 01 AB 1234).';
@@ -104,6 +114,11 @@ export const RiderRegistrationView = () => {
           <Field icon={<Phone size={15} />} label="Mobile Number" id="mobile" type="tel"
             placeholder="e.g. 9876543210" value={form.mobile} onChange={set('mobile')} error={errors.mobile} />
 
+          {/* Email */}
+          <Field icon={<Mail size={15} />} label="Email Address" id="email" type="email"
+            placeholder="e.g. rahul.sharma@example.com" value={form.email} onChange={set('email')} error={errors.email}
+            disabled={!!firebaseUser?.email} />
+
           {/* Vehicle Number */}
           <Field icon={<Car size={15} />} label="Vehicle Registration Number" id="vehicleNumber" type="text"
             placeholder="e.g. DL 01 AB 1234"
@@ -151,14 +166,20 @@ export const RiderRegistrationView = () => {
 };
 
 /* ── Reusable field component ── */
-const Field = ({ icon, label, id, type, placeholder, value, onChange, error, hint }) => (
+const Field = ({ icon, label, id, type, placeholder, value, onChange, error, hint, ...rest }) => (
   <div>
     <label style={styles.label} htmlFor={id}>{label}</label>
     <div style={{ position: 'relative' }}>
       {icon && <span style={styles.inputIcon}>{icon}</span>}
       <input id={id} type={type} value={value} onChange={onChange} placeholder={placeholder}
         className="input-field"
-        style={{ paddingLeft: icon ? '2.25rem' : '0.85rem', borderColor: error ? '#ef4444' : undefined }} />
+        style={{
+          paddingLeft: icon ? '2.25rem' : '0.85rem',
+          borderColor: error ? '#ef4444' : undefined,
+          backgroundColor: rest.disabled ? 'var(--neutral-light)' : undefined,
+          cursor: rest.disabled ? 'not-allowed' : undefined
+        }}
+        {...rest} />
     </div>
     {error && <p style={styles.errorText}><AlertCircle size={12} /> {error}</p>}
     {hint && !error && <p style={styles.hintText}>{hint}</p>}

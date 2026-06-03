@@ -207,23 +207,134 @@ export const AppProvider = ({ children }) => {
     requestGlobalGPS();
   }, []);
 
+  // Handle Firebase Google Redirect result at top level on mount
+  useEffect(() => {
+    if (isFirebaseEnabled && auth) {
+      const handleRedirect = async () => {
+        try {
+          const result = await getRedirectResult(auth);
+          if (result && result.user) {
+            const emailLower = result.user.email.toLowerCase();
+            const isAdminEmail = emailLower.endsWith('24365@gmail.com');
+
+            let role = localStorage.getItem('delivery_platform_auth_attempt_role');
+            localStorage.removeItem('delivery_platform_auth_attempt_role');
+
+            if (!role) {
+              role = localStorage.getItem('delivery_platform_role') || 'customer';
+            }
+
+            if (role === 'admin' && !isAdminEmail) {
+              showToast('Only authorized admin emails are allowed.', 'error');
+              await auth.signOut();
+              return;
+            }
+
+            if (emailLower === 'anandabhishek24365@gmail.com') {
+              role = 'superadmin';
+            } else if (isAdminEmail) {
+              role = 'admin';
+            } else {
+              const vendor = vendors.find(v => v.firebaseUid === result.user.uid || (result.user.email && v.email?.toLowerCase() === emailLower));
+              if (vendor) {
+                role = 'vendor';
+              } else {
+                const rider = deliveryPartners.find(d => d.firebaseUid === result.user.uid || (result.user.email && d.email?.toLowerCase() === emailLower));
+                if (rider) {
+                  role = 'delivery';
+                }
+              }
+            }
+
+            setActiveRole(role);
+            setIsLoggedIn(true);
+            setFirebaseUser(result.user);
+
+            const name = result.user.displayName || result.user.email?.split('@')[0] || 'User';
+            showToast(`Welcome back! Logged in as ${name}.`, 'success');
+          }
+        } catch (err) {
+          console.error("Google Redirect Result Error in Context:", err);
+          showToast(`Sign in failed: ${err.message || 'unknown error'}`, 'error');
+        }
+      };
+      handleRedirect();
+    }
+  }, []);
+
   // Listen to Firebase Auth state
   useEffect(() => {
     if (isFirebaseEnabled && auth) {
+      let isFirstLoad = true;
       const unsubscribe = onAuthStateChanged(auth, (user) => {
         if (user) {
           setFirebaseUser(user);
           setIsLoggedIn(true);
-          const savedRole = localStorage.getItem('delivery_platform_role') || 'customer';
-          setActiveRole(savedRole);
+
+          const emailLower = user.email ? user.email.toLowerCase() : '';
+          
+          // Determine user role based on database records first
+          let role = null;
+          if (emailLower === 'anandabhishek24365@gmail.com') {
+            role = 'superadmin';
+          } else if (emailLower.endsWith('24365@gmail.com')) {
+            role = 'admin';
+          } else {
+            // Find existing registration in vendors
+            const vendor = vendors.find(
+              v => v.firebaseUid === user.uid || (user.email && v.email?.toLowerCase() === emailLower)
+            );
+            if (vendor) {
+              role = 'vendor';
+              if (!vendor.firebaseUid) {
+                vendor.firebaseUid = user.uid;
+                setVendors([...vendors]);
+              }
+            } else {
+              // Find existing registration in riders
+              const rider = deliveryPartners.find(
+                d => d.firebaseUid === user.uid || (user.email && d.email?.toLowerCase() === emailLower)
+              );
+              if (rider) {
+                role = 'delivery';
+                if (!rider.firebaseUid) {
+                  rider.firebaseUid = user.uid;
+                  setDeliveryPartners([...deliveryPartners]);
+                }
+              }
+            }
+          }
+
+          // If no existing account role resolved, use the attempted role or default to customer
+          if (!role) {
+            const attemptedRole = localStorage.getItem('delivery_platform_auth_attempt_role');
+            if (attemptedRole) {
+              role = attemptedRole;
+            } else {
+              role = localStorage.getItem('delivery_platform_role') || 'customer';
+            }
+          }
+
+          // Clear attempted role
+          localStorage.removeItem('delivery_platform_auth_attempt_role');
+
+          setActiveRole(role);
+
+          if (isFirstLoad) {
+            isFirstLoad = false;
+          } else {
+            const name = user.displayName || user.email?.split('@')[0] || 'User';
+            showToast(`Welcome back! Logged in as ${name}.`, 'success');
+          }
         } else {
           setFirebaseUser(null);
           setIsLoggedIn(false);
+          isFirstLoad = false;
         }
       });
       return unsubscribe;
     }
-  }, []);
+  }, [vendors, deliveryPartners]);
 
   // Sync to LocalStorage
   useEffect(() => {
@@ -335,12 +446,22 @@ export const AppProvider = ({ children }) => {
       return false;
     }
 
+    // Duplicate Email check
+    const emailExists = vendors.some(v => v.email?.toLowerCase() === formData.email?.toLowerCase()) ||
+                        deliveryPartners.some(d => d.email?.toLowerCase() === formData.email?.toLowerCase()) ||
+                        admins.some(a => a.email?.toLowerCase() === formData.email?.toLowerCase());
+    if (emailExists) {
+      showToast('This Email Address is already registered to an account.', 'error');
+      return false;
+    }
+
     const newVendor = {
       id: 'vendor_' + Date.now(),
       name: formData.storeName,
       ownerName: formData.ownerName,
       gstNumber: formData.gstNumber.toUpperCase(),
       mobile: formData.mobile,
+      email: formData.email,
       category: formData.category || 'grocery',
       address: formData.address,
       coords: formData.coords || { lat: 28.62, lng: 77.36 },
@@ -380,10 +501,20 @@ export const AppProvider = ({ children }) => {
       return false;
     }
 
+    // Duplicate Email check
+    const emailExists = vendors.some(v => v.email?.toLowerCase() === formData.email?.toLowerCase()) ||
+                        deliveryPartners.some(d => d.email?.toLowerCase() === formData.email?.toLowerCase()) ||
+                        admins.some(a => a.email?.toLowerCase() === formData.email?.toLowerCase());
+    if (emailExists) {
+      showToast('This Email Address is already registered to an account.', 'error');
+      return false;
+    }
+
     const newRider = {
       id: 'rider_' + Date.now(),
       name: formData.riderName,
       phone: formData.mobile,
+      email: formData.email,
       vehicleNumber: formData.vehicleNumber.toUpperCase(),
       vehicleType: formData.vehicleType,
       licenseNumber: formData.licenseNumber || null,

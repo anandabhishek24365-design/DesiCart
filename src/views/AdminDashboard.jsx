@@ -5,7 +5,7 @@ import {
   ShieldAlert, Users, Store, Ticket, DollarSign, TrendingUp,
   Plus, Trash2, Check, X, AlertCircle, LogOut, Search,
   Clock, ShieldCheck, ShieldOff, RefreshCw, MessageSquare,
-  Bike, FileText, Phone, MapPin, Car, Bell, ChevronDown, User
+  Bike, FileText, Phone, MapPin, Car, Bell, ChevronDown, User, Mail
 } from 'lucide-react';
 
 /* ── Status badge helper ── */
@@ -358,12 +358,14 @@ export const AdminDashboard = () => {
                           <>
                             <DetailRow icon={User}    label="Owner"    value={reg.ownerName} />
                             <DetailRow icon={FileText} label="GST"     value={reg.gstNumber} />
+                            <DetailRow icon={Mail}     label="Email"    value={reg.email} />
                             <DetailRow icon={Phone}   label="Mobile"   value={reg.mobile} />
                             <DetailRow icon={MapPin}  label="Address"  value={reg.address} />
                             <DetailRow icon={Store}   label="Category" value={reg.category} />
                           </>
                         ) : (
                           <>
+                            <DetailRow icon={Mail}     label="Email"    value={reg.email} />
                             <DetailRow icon={Phone}   label="Mobile"   value={reg.phone} />
                             <DetailRow icon={Car}     label="Vehicle"  value={reg.vehicleNumber} />
                             <DetailRow icon={Bike}    label="Type"     value={reg.vehicleType} />

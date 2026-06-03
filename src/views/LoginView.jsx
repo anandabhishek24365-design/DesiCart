@@ -72,38 +72,7 @@ export const LoginView = () => {
   /* Reset errors when switching tabs */
   useEffect(() => { setError(''); setStep('form'); }, [tab, selectedRole]);
 
-  /* Handle Firebase Google redirect auth result on mount */
-  useEffect(() => {
-    const handleRedirectResultAsync = async () => {
-      try {
-        const result = await getRedirectResult(auth);
-        if (result && result.user) {
-          const emailLower = result.user.email.toLowerCase();
-          const isAdminEmail = emailLower.endsWith('24365@gmail.com');
-
-          let role = localStorage.getItem('delivery_platform_auth_attempt_role') || selectedRole;
-          // Clear the saved role
-          localStorage.removeItem('delivery_platform_auth_attempt_role');
-
-          if (role === 'admin' && !isAdminEmail) {
-            setError('Only authorized admin emails are allowed.');
-            await auth.signOut();
-            return;
-          }
-
-          if (emailLower === 'anandabhishek24365@gmail.com') {
-            role = 'superadmin';
-          }
-
-          handleSuccess(result.user, null, role);
-        }
-      } catch (err) {
-        console.error("Google Redirect Result Error:", err);
-        setError(`${friendlyError(err.code)} (Code: ${err.code || 'unknown'})`);
-      }
-    };
-    handleRedirectResultAsync();
-  }, []);
+  // Handled globally in AppContext.jsx
 
   const activeRole = ROLES.find(r => r.id === selectedRole);
 

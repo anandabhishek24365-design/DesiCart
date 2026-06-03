@@ -3,7 +3,7 @@ import { AppContext } from '../context/AppContext';
 import { AddressSelector } from '../components/AddressSelector';
 import {
   Store, User, FileText, Phone, MapPin, ChevronDown,
-  CheckCircle2, AlertCircle, Loader2, ArrowRight, LogOut, Package
+  CheckCircle2, AlertCircle, Loader2, ArrowRight, LogOut, Package, Mail
 } from 'lucide-react';
 
 const CATEGORIES = [
@@ -15,11 +15,11 @@ const CATEGORIES = [
 ];
 
 export const StoreRegistrationView = () => {
-  const { submitVendorRegistration, logout, showToast } = useContext(AppContext);
+  const { firebaseUser, submitVendorRegistration, logout, showToast } = useContext(AppContext);
 
   const [form, setForm] = useState({
     storeName: '', ownerName: '', gstNumber: '',
-    mobile: '', extraAddress: '', detectedAddress: '', category: 'grocery', minOrder: '99',
+    mobile: '', email: firebaseUser?.email || '', extraAddress: '', detectedAddress: '', category: 'grocery', minOrder: '99',
     coords: null
   });
   const [errors, setErrors] = useState({});
@@ -92,6 +92,13 @@ export const StoreRegistrationView = () => {
     detectLocation();
   }, []);
 
+  // Prefill email if logged in with Firebase Google auth
+  useEffect(() => {
+    if (firebaseUser?.email) {
+      setForm(f => ({ ...f, email: firebaseUser.email }));
+    }
+  }, [firebaseUser]);
+
   const validate = () => {
     const errs = {};
     if (!form.storeName.trim())  errs.storeName  = 'Store name is required.';
@@ -102,6 +109,9 @@ export const StoreRegistrationView = () => {
     if (!form.mobile.trim())     errs.mobile     = 'Mobile number is required.';
     else if (!/^[6-9]\d{9}$/.test(form.mobile.replace(/\s+/g, '').replace('+91', '')))
       errs.mobile = 'Enter a valid 10-digit Indian mobile number.';
+    if (!form.email.trim())      errs.email      = 'Email address is required.';
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim()))
+      errs.email = 'Enter a valid email address.';
     if (!form.coords)            errs.coords     = 'Store GPS location detection is required.';
     if (!form.extraAddress.trim()) errs.extraAddress = 'Manual address details are required.';
     return errs;
@@ -213,6 +223,19 @@ export const StoreRegistrationView = () => {
             value={form.mobile}
             onChange={set('mobile')}
             error={errors.mobile}
+          />
+
+          {/* Email */}
+          <Field
+            icon={<Mail size={15} />}
+            label="Business Email Address"
+            id="email"
+            type="email"
+            placeholder="e.g. sharma.grocers@example.com"
+            value={form.email}
+            onChange={set('email')}
+            error={errors.email}
+            disabled={!!firebaseUser?.email}
           />
 
           {/* Store Location Map Selector */}
@@ -361,7 +384,7 @@ export const StoreRegistrationView = () => {
 };
 
 /* ── Reusable field component ── */
-const Field = ({ icon, label, id, type, placeholder, value, onChange, error, hint }) => (
+const Field = ({ icon, label, id, type, placeholder, value, onChange, error, hint, ...rest }) => (
   <div>
     <label style={styles.label} htmlFor={id}>{label}</label>
     <div style={{ position: 'relative' }}>
@@ -375,8 +398,11 @@ const Field = ({ icon, label, id, type, placeholder, value, onChange, error, hin
         className="input-field"
         style={{
           paddingLeft: icon ? '2.25rem' : '0.85rem',
-          borderColor: error ? '#ef4444' : undefined
+          borderColor: error ? '#ef4444' : undefined,
+          backgroundColor: rest.disabled ? 'var(--neutral-light)' : undefined,
+          cursor: rest.disabled ? 'not-allowed' : undefined
         }}
+        {...rest}
       />
     </div>
     {error && (
