@@ -307,11 +307,12 @@ export const LoginView = () => {
           {/* ── Brand ── */}
           <div style={{ textAlign: 'center', marginBottom: '1.5rem', marginTop: '0.25rem' }}>
             <div style={{
-              width: 72, height: 72, borderRadius: '16px',
-              overflow: 'hidden', margin: '0 auto 0.9rem',
-              boxShadow: '0 4px 16px rgba(22,163,74,0.2)',
-              border: '2px solid rgba(22,163,74,0.15)'
-            }}>
+            width: 72, height: 72, borderRadius: '16px',
+            overflow: 'hidden', margin: '0 auto 0.9rem',
+            boxShadow: '0 4px 16px rgba(22,163,74,0.2)',
+            border: '2px solid rgba(22,163,74,0.15)',
+            animation: 'logoFloat 3s ease-in-out infinite'
+          }}>
               <img src="/logo.jpg" alt="DesiCart" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
             </div>
             <h2 style={{ fontSize: '1.25rem', fontWeight: 900, color: '#1a2e1a', margin: 0, letterSpacing: '-0.3px' }}>
@@ -615,6 +616,10 @@ export const LoginView = () => {
 
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes logoFloat {
+          0%, 100% { transform: translateY(0px); box-shadow: 0 4px 16px rgba(22,163,74,0.2); }
+          50%       { transform: translateY(-7px); box-shadow: 0 10px 24px rgba(22,163,74,0.28); }
+        }
         @keyframes heroFloat {
           0%, 100% { transform: translateY(0px); }
           50%       { transform: translateY(-10px); }
