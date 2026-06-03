@@ -1,11 +1,11 @@
-import React, { createContext, useState, useEffect } from 'react';
+import React, { createContext, useState, useEffect, useRef } from 'react';
 import {
   INITIAL_VENDORS,
   INITIAL_PRODUCTS,
   INITIAL_COUPONS,
   INITIAL_DELIVERY_PARTNERS
 } from '../data/initialData';
-import { auth, isFirebaseEnabled, getRedirectResult } from '../firebase';
+import { auth, isFirebaseEnabled } from '../firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 
 export const AppContext = createContext();
@@ -202,67 +202,13 @@ export const AppProvider = ({ children }) => {
     }
   };
 
-  // Run on application load automatically
-  useEffect(() => {
-    requestGlobalGPS();
-  }, []);
+  // Refs to give auth listener stable access to latest vendors/riders without re-registering
+  const vendorsRef = useRef(vendors);
+  const deliveryPartnersRef = useRef(deliveryPartners);
+  useEffect(() => { vendorsRef.current = vendors; }, [vendors]);
+  useEffect(() => { deliveryPartnersRef.current = deliveryPartners; }, [deliveryPartners]);
 
-  // Handle Firebase Google Redirect result at top level on mount
-  useEffect(() => {
-    if (isFirebaseEnabled && auth) {
-      const handleRedirect = async () => {
-        try {
-          const result = await getRedirectResult(auth);
-          if (result && result.user) {
-            const emailLower = result.user.email.toLowerCase();
-            const isAdminEmail = emailLower.endsWith('24365@gmail.com');
-
-            let role = localStorage.getItem('delivery_platform_auth_attempt_role');
-            localStorage.removeItem('delivery_platform_auth_attempt_role');
-
-            if (!role) {
-              role = localStorage.getItem('delivery_platform_role') || 'customer';
-            }
-
-            if (role === 'admin' && !isAdminEmail) {
-              showToast('Only authorized admin emails are allowed.', 'error');
-              await auth.signOut();
-              return;
-            }
-
-            if (emailLower === 'anandabhishek24365@gmail.com') {
-              role = 'superadmin';
-            } else if (isAdminEmail) {
-              role = 'admin';
-            } else {
-              const vendor = vendors.find(v => v.firebaseUid === result.user.uid || (result.user.email && v.email?.toLowerCase() === emailLower));
-              if (vendor) {
-                role = 'vendor';
-              } else {
-                const rider = deliveryPartners.find(d => d.firebaseUid === result.user.uid || (result.user.email && d.email?.toLowerCase() === emailLower));
-                if (rider) {
-                  role = 'delivery';
-                }
-              }
-            }
-
-            setActiveRole(role);
-            setIsLoggedIn(true);
-            setFirebaseUser(result.user);
-
-            const name = result.user.displayName || result.user.email?.split('@')[0] || 'User';
-            showToast(`Welcome back! Logged in as ${name}.`, 'success');
-          }
-        } catch (err) {
-          console.error("Google Redirect Result Error in Context:", err);
-          showToast(`Sign in failed: ${err.message || 'unknown error'}`, 'error');
-        }
-      };
-      handleRedirect();
-    }
-  }, []);
-
-  // Listen to Firebase Auth state
+  // Listen to Firebase Auth state — registered only once using refs for stable data access
   useEffect(() => {
     if (isFirebaseEnabled && auth) {
       let isFirstLoad = true;
@@ -272,7 +218,7 @@ export const AppProvider = ({ children }) => {
           setIsLoggedIn(true);
 
           const emailLower = user.email ? user.email.toLowerCase() : '';
-          
+
           // Determine user role based on database records first
           let role = null;
           if (emailLower === 'anandabhishek24365@gmail.com') {
@@ -280,43 +226,34 @@ export const AppProvider = ({ children }) => {
           } else if (emailLower.endsWith('24365@gmail.com')) {
             role = 'admin';
           } else {
-            // Find existing registration in vendors
-            const vendor = vendors.find(
+            // Use refs so this listener never needs to re-register
+            const vendor = vendorsRef.current.find(
               v => v.firebaseUid === user.uid || (user.email && v.email?.toLowerCase() === emailLower)
             );
             if (vendor) {
               role = 'vendor';
               if (!vendor.firebaseUid) {
                 vendor.firebaseUid = user.uid;
-                setVendors([...vendors]);
+                setVendors([...vendorsRef.current]);
               }
             } else {
-              // Find existing registration in riders
-              const rider = deliveryPartners.find(
+              const rider = deliveryPartnersRef.current.find(
                 d => d.firebaseUid === user.uid || (user.email && d.email?.toLowerCase() === emailLower)
               );
               if (rider) {
                 role = 'delivery';
                 if (!rider.firebaseUid) {
                   rider.firebaseUid = user.uid;
-                  setDeliveryPartners([...deliveryPartners]);
+                  setDeliveryPartners([...deliveryPartnersRef.current]);
                 }
               }
             }
           }
 
-          // If no existing account role resolved, use the attempted role or default to customer
+          // If no existing account role resolved, use the persisted role or default to customer
           if (!role) {
-            const attemptedRole = localStorage.getItem('delivery_platform_auth_attempt_role');
-            if (attemptedRole) {
-              role = attemptedRole;
-            } else {
-              role = localStorage.getItem('delivery_platform_role') || 'customer';
-            }
+            role = localStorage.getItem('delivery_platform_role') || 'customer';
           }
-
-          // Clear attempted role
-          localStorage.removeItem('delivery_platform_auth_attempt_role');
 
           setActiveRole(role);
 
@@ -334,7 +271,8 @@ export const AppProvider = ({ children }) => {
       });
       return unsubscribe;
     }
-  }, [vendors, deliveryPartners]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // stable — uses refs for vendors/deliveryPartners
 
   // Sync to LocalStorage
   useEffect(() => {

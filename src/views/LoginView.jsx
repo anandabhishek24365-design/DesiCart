@@ -4,8 +4,6 @@ import {
   auth,
   googleProvider,
   signInWithPopup,
-  signInWithRedirect,
-  getRedirectResult,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   sendPasswordResetEmail,
@@ -161,38 +159,31 @@ export const LoginView = () => {
   const handleGoogleSignIn = async () => {
     setError('');
     setIsLoading(true);
-    
-    // Save current selected role to local storage to persist it across redirect
-    localStorage.setItem('delivery_platform_auth_attempt_role', selectedRole);
-
-    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
     try {
-      if (isLocalhost) {
-        // Use fast popup on localhost
-        const result = await signInWithPopup(auth, googleProvider);
-        const emailLower = result.user.email.toLowerCase();
-        const isAdminEmail = emailLower.endsWith('24365@gmail.com');
+      // Always use popup — works on localhost and Vercel without any domain whitelisting
+      const result = await signInWithPopup(auth, googleProvider);
+      const emailLower = result.user.email.toLowerCase();
+      const isAdminEmail = emailLower.endsWith('24365@gmail.com');
 
-        let role = selectedRole;
-        if (role === 'admin' && !isAdminEmail) {
-          setError('Only authorized admin emails are allowed.');
-          await auth.signOut();
-          return;
-        }
-
-        if (emailLower === 'anandabhishek24365@gmail.com') {
-          role = 'superadmin';
-        }
-
-        handleSuccess(result.user, null, role);
-      } else {
-        // Use 100% reliable redirect on Vercel production
-        await signInWithRedirect(auth, googleProvider);
+      let role = selectedRole;
+      if (role === 'admin' && !isAdminEmail) {
+        setError('Only authorized admin emails are allowed.');
+        setIsLoading(false);
+        await auth.signOut();
+        return;
       }
+
+      if (emailLower === 'anandabhishek24365@gmail.com') {
+        role = 'superadmin';
+      }
+
+      handleSuccess(result.user, null, role);
     } catch (err) {
       console.error("Google Sign-In Error:", err);
-      setError(`${friendlyError(err.code)} (Code: ${err.code || 'unknown'})`);
+      if (err.code !== 'auth/popup-closed-by-user') {
+        setError(`${friendlyError(err.code)} (Code: ${err.code || 'unknown'})`);
+      }
       setIsLoading(false);
     }
   };
