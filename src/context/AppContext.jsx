@@ -356,6 +356,18 @@ export const AppProvider = ({ children }) => {
       }
     }, (err) => console.error('Firestore orders listener error:', err));
 
+    // ── products ──
+    const unsubProducts = onSnapshot(collection(db, 'products'), (snap) => {
+      if (snap.empty) {
+        // Seed first launch products
+        INITIAL_PRODUCTS.forEach((p) => setDoc(doc(db, 'products', p.id), p).catch(console.error));
+      } else {
+        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setProducts(data);
+        localStorage.setItem('delivery_platform_products', JSON.stringify(data));
+      }
+    }, (err) => console.error('Firestore products listener error:', err));
+
     return () => {
       unsubVendors();
       unsubRiders();
@@ -363,6 +375,7 @@ export const AppProvider = ({ children }) => {
       unsubSettings();
       unsubLog();
       unsubOrders();
+      unsubProducts();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -699,26 +712,42 @@ export const AppProvider = ({ children }) => {
 
   // Product Management (Vendor Side)
   const addProduct = (vendorId, productData) => {
+    const productId = 'prod_' + Date.now();
     const newProduct = {
       ...productData,
-      id: 'prod_' + Date.now(),
+      id: productId,
       vendorId,
       rating: 5.0,
       price: parseFloat(productData.price)
     };
-    setProducts((prev) => [...prev, newProduct]);
+    if (isFirebaseEnabled && db) {
+      setDoc(doc(db, 'products', productId), newProduct).catch(console.error);
+    } else {
+      setProducts((prev) => [...prev, newProduct]);
+    }
     showToast('Product added successfully!', 'success');
   };
 
   const editProduct = (productId, updatedData) => {
-    setProducts((prev) =>
-      prev.map((p) => (p.id === productId ? { ...p, ...updatedData, price: parseFloat(updatedData.price) } : p))
-    );
+    if (isFirebaseEnabled && db) {
+      updateDoc(doc(db, 'products', productId), {
+        ...updatedData,
+        price: parseFloat(updatedData.price)
+      }).catch(console.error);
+    } else {
+      setProducts((prev) =>
+        prev.map((p) => (p.id === productId ? { ...p, ...updatedData, price: parseFloat(updatedData.price) } : p))
+      );
+    }
     showToast('Product updated successfully!', 'success');
   };
 
   const deleteProduct = (productId) => {
-    setProducts((prev) => prev.filter((p) => p.id !== productId));
+    if (isFirebaseEnabled && db) {
+      deleteDoc(doc(db, 'products', productId)).catch(console.error);
+    } else {
+      setProducts((prev) => prev.filter((p) => p.id !== productId));
+    }
     showToast('Product removed from catalog.', 'warning');
   };
 
@@ -981,15 +1010,25 @@ export const AppProvider = ({ children }) => {
       vendorCoords: vendor?.coords || { lat: 28.62, lng: 77.36 }
     };
 
-    setProducts((prev) =>
-      prev.map((p) => {
-        const cartItem = cart.items.find((item) => item.id === p.id);
-        if (cartItem) {
-          return { ...p, stock: Math.max(0, p.stock - cartItem.quantity) };
+    if (isFirebaseEnabled && db) {
+      cart.items.forEach((item) => {
+        const p = products.find((prod) => prod.id === item.id);
+        if (p) {
+          const newStock = Math.max(0, (p.stock || 0) - item.quantity);
+          updateDoc(doc(db, 'products', p.id), { stock: newStock }).catch(console.error);
         }
-        return p;
-      })
-    );
+      });
+    } else {
+      setProducts((prev) =>
+        prev.map((p) => {
+          const cartItem = cart.items.find((item) => item.id === p.id);
+          if (cartItem) {
+            return { ...p, stock: Math.max(0, p.stock - cartItem.quantity) };
+          }
+          return p;
+        })
+      );
+    }
 
     if (isFirebaseEnabled && db) {
       setDoc(doc(db, 'orders', orderId), newOrder).catch(console.error);
