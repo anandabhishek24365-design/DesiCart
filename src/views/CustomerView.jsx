@@ -1,6 +1,6 @@
 import React, { useContext, useState, useEffect } from 'react';
 import { AppContext } from '../context/AppContext';
-import { MapMock } from '../components/MapMock';
+import { RealtimeRiderMap } from '../components/RealtimeRiderMap';
 import { AddressSelector } from '../components/AddressSelector';
 import { INITIAL_CATEGORIES, BANNER_SLIDES, MOCK_LOCATIONS } from '../data/initialData';
 import {
@@ -1152,7 +1152,7 @@ export const CustomerView = () => {
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
               {/* Animated Map Tracker */}
-              <MapMock status={trackingOrder.status} />
+              <RealtimeRiderMap order={trackingOrder} />
 
               {/* GPS Geolocation details */}
               <div className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem' }}>
@@ -1206,16 +1206,20 @@ export const CustomerView = () => {
                   {/* Stepper Steps */}
                   {[
                     { key: 'pending', title: 'Order Confirmed', desc: 'Awaiting store confirmation' },
-                    { key: 'preparing', title: 'Food Preparation', desc: 'Store is baking/packing your items' },
-                    { key: 'ready', title: 'Ready for Pickup', desc: 'Rider is picking up consignment' },
-                    { key: 'out_for_delivery', title: 'Out For Delivery', desc: 'Rider moving to your location' },
+                    { key: 'preparing', title: 'Store Preparing Order', desc: 'Store is baking/packing your items' },
+                    { key: 'rider_assigned', title: 'Rider Assigned', desc: 'Rider accepts shipment consignment' },
+                    { key: 'reached_store', title: 'Rider Reached Store', desc: 'Rider reached store and packing items' },
+                    { key: 'out_for_delivery', title: 'Rider On The Way', desc: 'Rider moving along roads toward your address' },
+                    { key: 'arriving_soon', title: 'Arriving Soon', desc: 'Rider is close by your location' },
                     { key: 'delivered', title: 'Delivered', desc: 'Package dropped off successfully' }
                   ].map((step, idx) => {
-                    const statuses = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
+                    const statuses = ['pending', 'preparing', 'ready', 'rider_assigned', 'reached_store', 'out_for_delivery', 'arriving_soon', 'delivered'];
                     const currentIdx = statuses.indexOf(trackingOrder.status);
                     const stepIdx = statuses.indexOf(step.key);
-                    const isCompleted = stepIdx <= currentIdx;
-                    const isActive = step.key === trackingOrder.status;
+                    
+                    // Match step 'ready' mapping or simple index
+                    const isCompleted = stepIdx <= currentIdx || (step.key === 'rider_assigned' && currentIdx >= statuses.indexOf('ready'));
+                    const isActive = step.key === trackingOrder.status || (step.key === 'rider_assigned' && trackingOrder.status === 'ready');
 
                     return (
                       <div key={step.key} style={{ position: 'relative', zIndex: 2 }}>

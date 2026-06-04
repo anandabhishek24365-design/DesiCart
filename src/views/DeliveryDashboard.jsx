@@ -1,4 +1,4 @@
-import React, { useContext, useState } from 'react';
+import React, { useContext, useState, useEffect, useRef } from 'react';
 import { AppContext } from '../context/AppContext';
 import {
   Bike,
@@ -10,8 +10,13 @@ import {
   AlertCircle,
   Clock,
   Briefcase,
-  LogOut
+  LogOut,
+  Play,
+  Pause,
+  Compass
 } from 'lucide-react';
+import { trackingService } from '../services/trackingService';
+import { fetchRoute } from '../services/routeService';
 
 export const DeliveryDashboard = () => {
   const {
@@ -35,13 +40,22 @@ export const DeliveryDashboard = () => {
   // 'jobs' | 'earnings'
   const [activeTab, setActiveTab] = useState('jobs');
 
+  // Simulation states
+  const [isSimulating, setIsSimulating] = useState(false);
+  const [simStepIndex, setSimStepIndex] = useState(0);
+  const [simRoutePoints, setSimRoutePoints] = useState([]);
+  const [simTotalDistance, setSimTotalDistance] = useState(0);
+  const [simTotalDuration, setSimTotalDuration] = useState(0);
+  const simIntervalIdRef = useRef(null);
+
   // Find active rider details
   const currentRider = deliveryPartners.find((r) => r.id === currentRiderId);
 
   // Derive job state
   const availableOrders = orders.filter((o) => o.status === 'ready' && !o.deliveryPartnerId);
   const activeOrder = orders.find(
-    (o) => o.deliveryPartnerId === currentRiderId && ['ready', 'out_for_delivery'].includes(o.status)
+    (o) => o.deliveryPartnerId === currentRiderId && 
+    ['ready', 'rider_assigned', 'reached_store', 'out_for_delivery', 'arriving_soon'].includes(o.status)
   );
 
   const completedDeliveries = orders.filter(
@@ -52,6 +66,105 @@ export const DeliveryDashboard = () => {
   const handleToggleStatus = () => {
     toggleRiderStatus(currentRiderId);
   };
+
+  // Handle simulation initialization when order status transitions
+  useEffect(() => {
+    if (!activeOrder) {
+      setIsSimulating(false);
+      setSimRoutePoints([]);
+      setSimStepIndex(0);
+      return;
+    }
+
+    const loadSimRoute = async () => {
+      const store = vendors.find(v => v.id === activeOrder.vendorId);
+      const storeCoords = store?.coords || { lat: 28.62, lng: 77.36 };
+      const customerCoords = activeOrder.customerCoords || { lat: 28.62, lng: 77.36 };
+
+      let startCoords, endCoords;
+
+      if (activeOrder.status === 'rider_assigned') {
+        // Start simulated location 1.5 km away from store
+        startCoords = { lat: storeCoords.lat + 0.008, lng: storeCoords.lng - 0.008 };
+        endCoords = storeCoords;
+      } else if (activeOrder.status === 'out_for_delivery' || activeOrder.status === 'arriving_soon') {
+        startCoords = storeCoords;
+        endCoords = customerCoords;
+      } else {
+        // ready or reached_store, no movement
+        setSimRoutePoints([]);
+        setSimStepIndex(0);
+        return;
+      }
+
+      const routeData = await fetchRoute(startCoords, endCoords);
+      if (routeData && routeData.coordinates && routeData.coordinates.length > 0) {
+        setSimRoutePoints(routeData.coordinates);
+        setSimTotalDistance(routeData.distance);
+        setSimTotalDuration(routeData.duration);
+        setSimStepIndex(0);
+        setIsSimulating(true); // Auto-start simulation for convenience
+      }
+    };
+
+    loadSimRoute();
+  }, [activeOrder?.id, activeOrder?.status]);
+
+  // Run simulation interval
+  useEffect(() => {
+    if (!isSimulating || simRoutePoints.length === 0 || !activeOrder) {
+      if (simIntervalIdRef.current) clearInterval(simIntervalIdRef.current);
+      return;
+    }
+
+    simIntervalIdRef.current = setInterval(() => {
+      setSimStepIndex((prevIdx) => {
+        const nextIdx = prevIdx + 1;
+        if (nextIdx >= simRoutePoints.length) {
+          // Reached destination!
+          clearInterval(simIntervalIdRef.current);
+          setIsSimulating(false);
+
+          // Handle automatic transitions on arrival
+          if (activeOrder.status === 'rider_assigned') {
+            updateOrderStatus(activeOrder.id, 'reached_store', currentRiderId);
+            showToast('Rider arrived at store!', 'success');
+          } else if (activeOrder.status === 'out_for_delivery' || activeOrder.status === 'arriving_soon') {
+            updateOrderStatus(activeOrder.id, 'arriving_soon', currentRiderId);
+            showToast('Rider has arrived at delivery destination!', 'info');
+          }
+          return prevIdx;
+        }
+
+        const currentPt = simRoutePoints[nextIdx];
+        const pctRemaining = (simRoutePoints.length - 1 - nextIdx) / (simRoutePoints.length - 1);
+        
+        const remDistMeters = simTotalDistance * pctRemaining;
+        const remDistStr = (remDistMeters / 1000).toFixed(1) + " km";
+        const remDurationSeconds = simTotalDuration * pctRemaining;
+        const remEtaStr = Math.ceil(remDurationSeconds / 60) + " mins";
+
+        // Auto trigger arriving_soon status when close (< 300 meters)
+        if (activeOrder.status === 'out_for_delivery' && remDistMeters < 300) {
+          updateOrderStatus(activeOrder.id, 'arriving_soon', currentRiderId);
+        }
+
+        // Push update to Realtime Database
+        trackingService.updateTracking(activeOrder.id, {
+          location: currentPt,
+          eta: remEtaStr,
+          distance: remDistStr,
+          status: activeOrder.status
+        }).catch(console.error);
+
+        return nextIdx;
+      });
+    }, 3000); // Step every 3 seconds
+
+    return () => {
+      if (simIntervalIdRef.current) clearInterval(simIntervalIdRef.current);
+    };
+  }, [isSimulating, simRoutePoints, activeOrder?.id, activeOrder?.status, simTotalDistance, simTotalDuration]);
 
   return (
     <div style={{ maxWidth: '600px', margin: '0 auto', paddingBottom: '5rem' }} className="animate-fade-in">
@@ -185,54 +298,87 @@ export const DeliveryDashboard = () => {
                   ))}
                 </div>
 
-                {/* Navigation Routing Steps */}
-                <div style={{ padding: '0.75rem', border: '1px dashed var(--neutral-border)', borderRadius: 'var(--radius-lg)', backgroundColor: 'var(--neutral-white)', marginTop: '0.5rem' }}>
-                  <h4 style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--neutral-text)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                    <Navigation size={14} style={{ color: 'var(--accent-orange)' }} />
-                    <span>Navigation Routing & Steps</span>
-                  </h4>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', fontSize: '0.75rem', color: 'var(--neutral-muted)' }}>
-                    <div style={{ display: 'flex', gap: '0.4rem' }}>
-                      <span style={{ color: 'var(--primary-green)' }}>📍</span>
-                      <span><strong>Step 1:</strong> Start from your GPS location. Travel 0.4 km towards <strong>{activeOrder.vendorName}</strong>.</span>
-                    </div>
-                    <div style={{ display: 'flex', gap: '0.4rem' }}>
-                      <span style={{ color: 'var(--accent-orange)' }}>🏬</span>
-                      <span><strong>Step 2:</strong> Arrive at pickup store and collect order package.</span>
-                    </div>
-                    <div style={{ display: 'flex', gap: '0.4rem' }}>
-                      <span style={{ color: 'var(--primary-green)' }}>🛣️</span>
-                      <span><strong>Step 3:</strong> Proceed south on main highway for 1.8 km towards <strong>{activeOrder.address.split(',')[0]}</strong>.</span>
-                    </div>
-                    <div style={{ display: 'flex', gap: '0.4rem' }}>
-                      <span style={{ color: 'var(--accent-orange)' }}>🏠</span>
-                      <span><strong>Step 4:</strong> Reach customer drop destination, verify cash/payment, and hand over package.</span>
-                    </div>
+                 {/* Simulation Control Card */}
+                <div style={{ padding: '1rem', border: '1px solid var(--neutral-border)', borderRadius: 'var(--radius-lg)', backgroundColor: 'var(--neutral-light)', marginTop: '0.5rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                    <h4 style={{ fontSize: '0.88rem', fontWeight: 800, color: 'var(--neutral-text)', display: 'flex', alignItems: 'center', gap: '0.35rem', margin: 0 }}>
+                      <Bike size={16} style={{ color: '#16a34a' }} />
+                      <span>Live Simulation Engine</span>
+                    </h4>
+                    <span className={`badge ${isSimulating ? 'badge-delivered' : 'badge-pending'}`} style={{ fontSize: '0.62rem' }}>
+                      {isSimulating ? 'SIMULATOR ACTIVE' : 'SIMULATOR PAUSED'}
+                    </span>
                   </div>
+
+                  {simRoutePoints.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                      {/* Stats */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                        <div style={{ padding: '0.5rem', backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid var(--neutral-border)' }}>
+                          <div style={{ fontSize: '0.65rem', color: 'var(--neutral-muted)', fontWeight: 700, textTransform: 'uppercase' }}>SIM ROUTE POINTS</div>
+                          <div style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--neutral-text)' }}>{simStepIndex + 1} / {simRoutePoints.length}</div>
+                        </div>
+                        <div style={{ padding: '0.5rem', backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid var(--neutral-border)' }}>
+                          <div style={{ fontSize: '0.65rem', color: 'var(--neutral-muted)', fontWeight: 700, textTransform: 'uppercase' }}>TARGET LOCATION</div>
+                          <div style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--neutral-text)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                            {activeOrder.status === 'rider_assigned' ? 'Pickup Store' : 'Customer Address'}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Play/Pause controls */}
+                      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.2rem' }}>
+                        <button
+                          type="button"
+                          onClick={() => setIsSimulating(!isSimulating)}
+                          className={`btn btn-sm ${isSimulating ? 'btn-secondary' : 'btn-primary'}`}
+                          style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem', height: '32px', fontSize: '0.78rem', fontWeight: 700 }}
+                        >
+                          {isSimulating ? (
+                            <><Pause size={14} /> Pause Simulator</>
+                          ) : (
+                            <><Play size={14} /> Start Simulator</>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '0.75rem', color: 'var(--neutral-muted)', textAlign: 'center', padding: '0.5rem 0' }}>
+                      Rider stationary. Simulation will initialize automatically when transitioning coordinates.
+                    </div>
+                  )}
                 </div>
 
                 {/* Dispatch Progress Controls */}
                 <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                  {activeOrder.status === 'ready' ? (
+                  {activeOrder.status === 'ready' || activeOrder.status === 'rider_assigned' ? (
                     <>
                       <button
-                        onClick={() => updateOrderStatus(activeOrder.id, 'out_for_delivery', currentRiderId)}
-                        className="btn btn-orange"
+                        onClick={() => updateOrderStatus(activeOrder.id, 'reached_store', currentRiderId)}
+                        className="btn btn-primary"
                         style={{ width: '100%' }}
                       >
-                        Confirm Order Picked Up
+                        📍 Reached Store (Arrived)
                       </button>
                       <button
                         onClick={() => {
                           updateOrderStatus(activeOrder.id, 'ready', null);
-                          showToast('Delivery request declined/rejected.', 'warning');
+                          showToast('Delivery job rejected / returned to pool.', 'warning');
                         }}
                         className="btn btn-secondary"
                         style={{ width: '100%', color: '#ef4444', borderColor: '#fca5a5' }}
                       >
-                        Reject Delivery Request
+                        Reject Delivery Assignment
                       </button>
                     </>
+                  ) : activeOrder.status === 'reached_store' ? (
+                    <button
+                      onClick={() => updateOrderStatus(activeOrder.id, 'out_for_delivery', currentRiderId)}
+                      className="btn btn-orange"
+                      style={{ width: '100%' }}
+                    >
+                      📦 Confirm Order Picked Up
+                    </button>
                   ) : (
                     <button
                       onClick={() => updateOrderStatus(activeOrder.id, 'delivered', currentRiderId)}

@@ -22,6 +22,14 @@ import {
   query,
   orderBy
 } from 'firebase/firestore';
+import {
+  getDatabase,
+  ref,
+  set,
+  onValue,
+  off,
+  update
+} from 'firebase/database';
 
 // DesiCart Firebase Project Configuration
 const firebaseConfig = {
@@ -45,6 +53,9 @@ auth.languageCode = 'en';
 // Firestore database instance
 const db = getFirestore(app);
 
+// Realtime Database instance
+const rtdb = getDatabase(app);
+
 // Google Auth Provider
 const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
@@ -55,6 +66,7 @@ export {
   app,
   auth,
   db,
+  rtdb,
   googleProvider,
   isFirebaseEnabled,
   GoogleAuthProvider,
@@ -74,5 +86,11 @@ export {
   onSnapshot,
   serverTimestamp,
   query,
-  orderBy
+  orderBy,
+  // Realtime Database helpers
+  ref,
+  set as rtdbSet,
+  onValue as rtdbOnValue,
+  off as rtdbOff,
+  update as rtdbUpdate
 };

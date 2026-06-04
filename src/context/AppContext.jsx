@@ -343,12 +343,26 @@ export const AppProvider = ({ children }) => {
       }
     }, (err) => console.error('Firestore activityLog listener error:', err));
 
+    // ── orders ──
+    const unsubOrders = onSnapshot(collection(db, 'orders'), (snap) => {
+      if (!snap.empty) {
+        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        data.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        setOrders(data);
+        localStorage.setItem('delivery_platform_orders', JSON.stringify(data));
+      } else {
+        setOrders([]);
+        localStorage.setItem('delivery_platform_orders', JSON.stringify([]));
+      }
+    }, (err) => console.error('Firestore orders listener error:', err));
+
     return () => {
       unsubVendors();
       unsubRiders();
       unsubAdmins();
       unsubSettings();
       unsubLog();
+      unsubOrders();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -962,7 +976,9 @@ export const AppProvider = ({ children }) => {
       customerName: firebaseUser?.displayName || 'Customer',
       customerPhone: '+91 98765 00000',
       ratings: null,
-      reviews: null
+      reviews: null,
+      customerCoords: globalCoords || { lat: 28.62, lng: 77.36 },
+      vendorCoords: vendor?.coords || { lat: 28.62, lng: 77.36 }
     };
 
     setProducts((prev) =>
@@ -975,7 +991,12 @@ export const AppProvider = ({ children }) => {
       })
     );
 
-    setOrders((prev) => [newOrder, ...prev]);
+    if (isFirebaseEnabled && db) {
+      setDoc(doc(db, 'orders', orderId), newOrder).catch(console.error);
+    } else {
+      setOrders((prev) => [newOrder, ...prev]);
+    }
+
     setCart({ items: [], subtotal: 0, discount: 0, deliveryFee: 40, total: 0, appliedCoupon: null });
     showToast('Order placed successfully! Tracking live state.', 'success');
     
@@ -984,29 +1005,52 @@ export const AppProvider = ({ children }) => {
 
   // Update order status (Vendor & Rider Actions)
   const updateOrderStatus = (orderId, status, riderId = null) => {
-    setOrders((prevOrders) =>
-      prevOrders.map((order) => {
-        if (order.id !== orderId) return order;
+    if (isFirebaseEnabled && db) {
+      const updateData = { status };
+      if (riderId) {
+        updateData.deliveryPartnerId = riderId;
+      }
+      updateDoc(doc(db, 'orders', orderId), updateData).catch(console.error);
 
-        const updatedOrder = { ...order, status };
-        if (riderId) {
-          updatedOrder.deliveryPartnerId = riderId;
+      if (status === 'delivered') {
+        const order = orders.find(o => o.id === orderId);
+        const partnerId = riderId || order?.deliveryPartnerId;
+        if (partnerId) {
+          const currentR = deliveryPartners.find(r => r.id === partnerId);
+          if (currentR) {
+            const fee = order ? order.deliveryFee : 40;
+            updateDoc(doc(db, 'riders', partnerId), {
+              totalEarnings: (currentR.totalEarnings || 0) + 45 + fee,
+              currentOrderId: null
+            }).catch(console.error);
+          }
         }
+      }
+    } else {
+      setOrders((prevOrders) =>
+        prevOrders.map((order) => {
+          if (order.id !== orderId) return order;
 
-        if (status === 'delivered') {
-          setDeliveryPartners((riders) =>
-            riders.map((r) => {
-              if (r.id === (riderId || order.deliveryPartnerId)) {
-                return { ...r, totalEarnings: r.totalEarnings + 45 + order.deliveryFee, currentOrderId: null };
-              }
-              return r;
-            })
-          );
-        }
+          const updatedOrder = { ...order, status };
+          if (riderId) {
+            updatedOrder.deliveryPartnerId = riderId;
+          }
 
-        return updatedOrder;
-      })
-    );
+          if (status === 'delivered') {
+            setDeliveryPartners((riders) =>
+              riders.map((r) => {
+                if (r.id === (riderId || order.deliveryPartnerId)) {
+                  return { ...r, totalEarnings: r.totalEarnings + 45 + order.deliveryFee, currentOrderId: null };
+                }
+                return r;
+              })
+            );
+          }
+
+          return updatedOrder;
+        })
+      );
+    }
 
     let statusText = status.replace('_', ' ');
     statusText = statusText.charAt(0).toUpperCase() + statusText.slice(1);
@@ -1015,33 +1059,52 @@ export const AppProvider = ({ children }) => {
 
   // Delivery accept job
   const acceptDeliveryJob = (orderId, riderId) => {
-    setDeliveryPartners((prev) =>
-      prev.map((r) => (r.id === riderId ? { ...r, currentOrderId: orderId } : r))
-    );
-    updateOrderStatus(orderId, 'out_for_delivery', riderId);
+    if (isFirebaseEnabled && db) {
+      updateDoc(doc(db, 'riders', riderId), { currentOrderId: orderId }).catch(console.error);
+      updateOrderStatus(orderId, 'rider_assigned', riderId);
+    } else {
+      setDeliveryPartners((prev) =>
+        prev.map((r) => (r.id === riderId ? { ...r, currentOrderId: orderId } : r))
+      );
+      updateOrderStatus(orderId, 'rider_assigned', riderId);
+    }
     showToast('Delivery job accepted! Navigate to pickup.', 'success');
   };
 
   // Submit order review
   const submitOrderReview = (orderId, rating, comment) => {
-    setOrders((prev) =>
-      prev.map((order) =>
-        order.id === orderId ? { ...order, ratings: rating, reviews: comment } : order
-      )
-    );
-    
-    const order = orders.find(o => o.id === orderId);
-    if (order) {
-      setVendors((prevVendors) =>
-        prevVendors.map((v) => {
-          if (v.id === order.vendorId) {
-            const count = v.reviewsCount + 1;
-            const newRating = parseFloat(((v.rating * v.reviewsCount + rating) / count).toFixed(1));
-            return { ...v, rating: newRating, reviewsCount: count };
-          }
-          return v;
-        })
+    if (isFirebaseEnabled && db) {
+      updateDoc(doc(db, 'orders', orderId), { ratings: rating, reviews: comment }).catch(console.error);
+      
+      const order = orders.find(o => o.id === orderId);
+      if (order) {
+        const v = vendors.find(vendor => vendor.id === order.vendorId);
+        if (v) {
+          const count = (v.reviewsCount || 0) + 1;
+          const newRating = parseFloat((((v.rating || 5) * (v.reviewsCount || 0) + rating) / count).toFixed(1));
+          updateDoc(doc(db, 'vendors', v.id), { rating: newRating, reviewsCount: count }).catch(console.error);
+        }
+      }
+    } else {
+      setOrders((prev) =>
+        prev.map((order) =>
+          order.id === orderId ? { ...order, ratings: rating, reviews: comment } : order
+        )
       );
+      
+      const order = orders.find(o => o.id === orderId);
+      if (order) {
+        setVendors((prevVendors) =>
+          prevVendors.map((v) => {
+            if (v.id === order.vendorId) {
+              const count = v.reviewsCount + 1;
+              const newRating = parseFloat(((v.rating * v.reviewsCount + rating) / count).toFixed(1));
+              return { ...v, rating: newRating, reviewsCount: count };
+            }
+            return v;
+          })
+        );
+      }
     }
 
     showToast('Thank you for your rating!', 'success');
