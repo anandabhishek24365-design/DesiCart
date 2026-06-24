@@ -60,7 +60,8 @@ export const CustomerView = () => {
     addCustomerPayment,
     deleteCustomerPayment,
     updateCustomerProfile,
-    submitComplaint
+    submitComplaint,
+    showToast
   } = useContext(AppContext);
 
   // Sub-navigation state
@@ -157,16 +158,65 @@ export const CustomerView = () => {
   };
 
   // Perform checkout action
-  const handlePlaceOrder = () => {
+  const handlePlaceOrder = async () => {
     if (!address.trim()) {
       alert('Please enter a delivery address');
       return;
     }
-    const orderId = checkout(address, paymentMethod);
-    if (orderId) {
-      setActiveTrackingOrderId(orderId);
-      setCheckoutStep(1);
-      setActiveTab('tracking');
+
+    if (paymentMethod === 'upi') {
+      if (!window.Razorpay) {
+        showToast('Razorpay payment gateway failed to load. Please check your network connection.', 'error');
+        return;
+      }
+
+      try {
+        const keyRes = await fetch('/api/config/razorpay-key');
+        const keyData = await keyRes.json();
+        const razorpayKey = keyData.keyId;
+
+        const options = {
+          key: razorpayKey,
+          amount: Math.round(cart.total * 100), // in paise
+          currency: 'INR',
+          name: 'DesiCart',
+          description: `Order from ${activeCartStore?.name || 'Local Store'}`,
+          handler: async function (response) {
+            const orderId = await checkout(address, paymentMethod);
+            if (orderId) {
+              setActiveTrackingOrderId(orderId);
+              setCheckoutStep(1);
+              setActiveTab('tracking');
+              showToast(`Payment successful! Transaction ID: ${response.razorpay_payment_id}`, 'success');
+            }
+          },
+          prefill: {
+            name: firebaseUser?.displayName || 'Customer',
+            email: firebaseUser?.email || 'customer@desicart.com',
+            contact: '9876500000'
+          },
+          theme: {
+            color: '#16a34a'
+          },
+          modal: {
+            ondismiss: function () {
+              showToast('UPI Payment cancelled by user.', 'warning');
+            }
+          }
+        };
+
+        const rzp = new window.Razorpay(options);
+        rzp.open();
+      } catch (err) {
+        showToast('Failed to load payment credentials: ' + err.message, 'error');
+      }
+    } else {
+      const orderId = await checkout(address, paymentMethod);
+      if (orderId) {
+        setActiveTrackingOrderId(orderId);
+        setCheckoutStep(1);
+        setActiveTab('tracking');
+      }
     }
   };
 

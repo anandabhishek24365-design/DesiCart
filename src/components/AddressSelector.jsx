@@ -127,7 +127,7 @@ export const AddressSelector = ({
     };
   }, [isOpen, leafletLoaded]);
 
-  const handleReverseGeocode = async (lat, lng) => {
+  async function handleReverseGeocode(lat, lng) {
     setLoadingAddress(true);
     setTempCoords({ lat, lng });
     try {

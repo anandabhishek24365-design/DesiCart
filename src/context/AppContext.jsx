@@ -1,4 +1,5 @@
 import React, { createContext, useState, useEffect, useRef } from 'react';
+import { io } from 'socket.io-client';
 import {
   INITIAL_VENDORS,
   INITIAL_PRODUCTS,
@@ -7,7 +8,8 @@ import {
 } from '../data/initialData';
 import {
   auth, db, isFirebaseEnabled,
-  collection, doc, setDoc, updateDoc, deleteDoc, getDocs, onSnapshot, query, orderBy, serverTimestamp
+  collection, doc, setDoc, updateDoc, deleteDoc, getDocs, onSnapshot, query, orderBy, serverTimestamp,
+  updateProfile
 } from '../firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 
@@ -205,6 +207,40 @@ export const AppProvider = ({ children }) => {
       showToast('Geolocation is not supported by your browser.', 'error');
     }
   };
+
+  const fetchOrders = async () => {
+    const token = localStorage.getItem('desicart_token');
+    if (!token) return;
+    try {
+      const response = await fetch('/api/orders', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setOrders(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch orders:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (isLoggedIn) {
+      fetchOrders();
+    }
+  }, [isLoggedIn]);
+
+  useEffect(() => {
+    const socket = io();
+
+    socket.on('order_status_update', () => {
+      fetchOrders();
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [isLoggedIn]);
 
   // Refs to give auth listener stable access to latest vendors/riders without re-registering
   const vendorsRef = useRef(vendors);
@@ -455,13 +491,13 @@ export const AppProvider = ({ children }) => {
   }, [supportTickets]);
 
   // Toast system helper
-  const showToast = (message, type = 'success') => {
+  function showToast(message, type = 'success') {
     const id = Date.now();
     setNotifications((prev) => [...prev, { id, message, type }]);
     setTimeout(() => {
       setNotifications((prev) => prev.filter((n) => n.id !== id));
     }, 4000);
-  };
+  }
 
   // ─── REGISTRATION HELPERS ────────────────────────────────────────────────────
 
@@ -967,58 +1003,28 @@ export const AppProvider = ({ children }) => {
   };
 
   // Checkout Execution
-  const checkout = (address, paymentMethod) => {
+  const checkout = async (address, paymentMethod) => {
     if (cart.items.length === 0) {
       showToast('Cart is empty!', 'error');
       return null;
     }
 
-    const vendorId = cart.items[0].vendorId;
-    const vendor = vendors.find((v) => v.id === vendorId);
-    const vendorName = vendor?.name || 'Local Vendor';
-
-    // Verify store is within 15 km service radius before creating order
-    if (vendor && vendor.coords) {
-      const dist = getDistanceToStore(vendor.coords);
-      if (dist === null || dist > 15) {
-        showToast(`Checkout failed: ${vendorName} is outside our 15 km delivery area (${dist ? dist.toFixed(1) : 'unknown'} km away).`, 'error');
-        return null;
-      }
-    }
-
-    const orderId = 'order_' + Date.now();
-
-    const newOrder = {
-      id: orderId,
-      vendorId,
-      vendorName,
-      items: [...cart.items],
-      subtotal: cart.subtotal,
-      discount: cart.discount,
-      deliveryFee: cart.deliveryFee,
-      total: cart.total,
-      status: 'pending',
-      createdAt: new Date().toISOString(),
-      address,
-      paymentMethod,
-      deliveryPartnerId: null,
-      customerName: firebaseUser?.displayName || 'Customer',
-      customerPhone: '+91 98765 00000',
-      ratings: null,
-      reviews: null,
-      customerCoords: globalCoords || { lat: 28.62, lng: 77.36 },
-      vendorCoords: vendor?.coords || { lat: 28.62, lng: 77.36 }
-    };
-
-    if (isFirebaseEnabled && db) {
-      cart.items.forEach((item) => {
-        const p = products.find((prod) => prod.id === item.id);
-        if (p) {
-          const newStock = Math.max(0, (p.stock || 0) - item.quantity);
-          updateDoc(doc(db, 'products', p.id), { stock: newStock }).catch(console.error);
-        }
+    const token = localStorage.getItem('desicart_token');
+    try {
+      const response = await fetch('/api/checkout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ cart, address, paymentMethod })
       });
-    } else {
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Checkout failed');
+      }
+
+      // Update catalog stock locally for direct feedback
       setProducts((prev) =>
         prev.map((p) => {
           const cartItem = cart.items.find((item) => item.id === p.id);
@@ -1028,72 +1034,59 @@ export const AppProvider = ({ children }) => {
           return p;
         })
       );
-    }
 
-    if (isFirebaseEnabled && db) {
-      setDoc(doc(db, 'orders', orderId), newOrder).catch(console.error);
-    } else {
-      setOrders((prev) => [newOrder, ...prev]);
+      setCart({ items: [], subtotal: 0, discount: 0, deliveryFee: 40, total: 0, appliedCoupon: null });
+      fetchOrders();
+      showToast('Order placed successfully! Tracking live state.', 'success');
+      return data.orderId;
+    } catch (err) {
+      showToast(err.message, 'error');
+      return null;
     }
-
-    setCart({ items: [], subtotal: 0, discount: 0, deliveryFee: 40, total: 0, appliedCoupon: null });
-    showToast('Order placed successfully! Tracking live state.', 'success');
-    
-    return orderId;
   };
 
   // Update order status (Vendor & Rider Actions)
-  const updateOrderStatus = (orderId, status, riderId = null) => {
-    if (isFirebaseEnabled && db) {
-      const updateData = { status };
-      if (riderId) {
-        updateData.deliveryPartnerId = riderId;
+  const updateOrderStatus = async (orderId, status, riderId = null) => {
+    const token = localStorage.getItem('desicart_token');
+    try {
+      const response = await fetch('/api/orders/update-status', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ orderId, status, riderId })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to update order status');
       }
-      updateDoc(doc(db, 'orders', orderId), updateData).catch(console.error);
 
+      fetchOrders();
+
+      // Mirror state changes locally for immediate user actions updates
       if (status === 'delivered') {
         const order = orders.find(o => o.id === orderId);
         const partnerId = riderId || order?.deliveryPartnerId;
         if (partnerId) {
-          const currentR = deliveryPartners.find(r => r.id === partnerId);
-          if (currentR) {
-            const fee = order ? order.deliveryFee : 40;
-            updateDoc(doc(db, 'riders', partnerId), {
-              totalEarnings: (currentR.totalEarnings || 0) + 45 + fee,
-              currentOrderId: null
-            }).catch(console.error);
-          }
+          setDeliveryPartners((riders) =>
+            riders.map((r) => {
+              if (r.id === partnerId) {
+                const fee = order ? order.deliveryFee : 40;
+                return { ...r, totalEarnings: (r.totalEarnings || 0) + 45 + fee, currentOrderId: null };
+              }
+              return r;
+            })
+          );
         }
       }
-    } else {
-      setOrders((prevOrders) =>
-        prevOrders.map((order) => {
-          if (order.id !== orderId) return order;
 
-          const updatedOrder = { ...order, status };
-          if (riderId) {
-            updatedOrder.deliveryPartnerId = riderId;
-          }
-
-          if (status === 'delivered') {
-            setDeliveryPartners((riders) =>
-              riders.map((r) => {
-                if (r.id === (riderId || order.deliveryPartnerId)) {
-                  return { ...r, totalEarnings: r.totalEarnings + 45 + order.deliveryFee, currentOrderId: null };
-                }
-                return r;
-              })
-            );
-          }
-
-          return updatedOrder;
-        })
-      );
+      let statusText = status.replace('_', ' ');
+      statusText = statusText.charAt(0).toUpperCase() + statusText.slice(1);
+      showToast(`Order status updated to: ${statusText}`, 'info');
+    } catch (err) {
+      showToast(err.message, 'error');
     }
-
-    let statusText = status.replace('_', ' ');
-    statusText = statusText.charAt(0).toUpperCase() + statusText.slice(1);
-    showToast(`Order status updated to: ${statusText}`, 'info');
   };
 
   // Delivery accept job

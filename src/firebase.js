@@ -60,7 +60,7 @@ const rtdb = getDatabase(app);
 const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
-const isFirebaseEnabled = true;
+const isFirebaseEnabled = false;
 
 export {
   app,

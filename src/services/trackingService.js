@@ -1,31 +1,38 @@
-import { rtdb, ref, rtdbSet, rtdbOnValue, rtdbOff, rtdbUpdate } from '../firebase';
+import { io } from 'socket.io-client';
+
+// Establish a single shared socket connection
+const socket = io();
 
 export const trackingService = {
   // Update the live tracking data for an order (location, ETA, distance, etc.)
   updateTracking: (orderId, data) => {
-    const trackingRef = ref(rtdb, `tracking/${orderId}`);
-    return rtdbUpdate(trackingRef, {
-      ...data,
+    socket.emit('rider_location_update', {
+      orderId,
+      lat: data.location?.lat,
+      lng: data.location?.lng,
       timestamp: Date.now()
     });
+    return Promise.resolve();
   },
 
   // Listen to live tracking updates for an order
   listenToTracking: (orderId, onUpdate) => {
-    const trackingRef = ref(rtdb, `tracking/${orderId}`);
-    rtdbOnValue(trackingRef, (snapshot) => {
-      if (snapshot.exists()) {
-        onUpdate(snapshot.val());
-      } else {
-        onUpdate(null);
-      }
-    });
-    return () => rtdbOff(trackingRef);
+    const handleLocationUpdate = (data) => {
+      onUpdate({
+        location: { lat: data.lat, lng: data.lng },
+        timestamp: data.timestamp
+      });
+    };
+    
+    socket.on(`rider_location_${orderId}`, handleLocationUpdate);
+    
+    return () => {
+      socket.off(`rider_location_${orderId}`, handleLocationUpdate);
+    };
   },
 
   // Delete/cleanup tracking data when order is completed
   clearTracking: (orderId) => {
-    const trackingRef = ref(rtdb, `tracking/${orderId}`);
-    return rtdbSet(trackingRef, null);
+    return Promise.resolve();
   }
 };
