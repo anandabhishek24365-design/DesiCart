@@ -86,7 +86,7 @@ export const LoginView = () => {
       case 'auth/too-many-requests':      return 'Too many attempts. Please wait a few minutes.';
       case 'auth/popup-closed-by-user':   return '';
       case 'auth/network-request-failed': return 'Network error. Check your internet connection.';
-      default:                            return 'Something went wrong. Please try again.';
+      default:                            return null;
     }
   };
 
@@ -174,7 +174,7 @@ export const LoginView = () => {
       if (err.code === 'auth/popup-closed-by-user') {
         setError('Sign-in cancelled. Please try again.');
       } else {
-        setError(friendlyError(err.code) || err.message);
+        setError(friendlyError(err.code) || err.message || 'Something went wrong. Please try again.');
       }
       setIsLoading(false);
     }
