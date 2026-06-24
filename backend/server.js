@@ -7,8 +7,13 @@ import Razorpay from 'razorpay';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import admin from 'firebase-admin';
 
 dotenv.config();
+
+admin.initializeApp({
+  projectId: process.env.FIREBASE_PROJECT_ID || 'desicart-a15cd'
+});
 
 const app = express();
 const server = http.createServer(app);
@@ -113,6 +118,40 @@ app.post('/api/auth/login', (req, res) => {
 
   const token = jwt.sign({ email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
   res.json({ token, user: { name: user.name, email: user.email, role: user.role } });
+});
+
+app.post('/api/auth/google', async (req, res) => {
+  const { idToken, role } = req.body;
+  if (!idToken || !role) {
+    return res.status(400).json({ error: 'ID Token and Role are required' });
+  }
+
+  try {
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    const emailLower = decodedToken.email.toLowerCase().trim();
+    const name = decodedToken.name || decodedToken.email.split('@')[0];
+
+    if (role === 'admin' && !emailLower.endsWith('24365@gmail.com')) {
+      return res.status(403).json({ error: 'Only authorized admin emails are allowed.' });
+    }
+
+    let user = users.find(u => u.email === emailLower && u.role === role);
+    if (!user) {
+      user = {
+        name,
+        email: emailLower,
+        passwordHash: null,
+        role
+      };
+      users.push(user);
+    }
+
+    const token = jwt.sign({ email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    res.json({ token, user: { name: user.name, email: user.email, role: user.role } });
+  } catch (error) {
+    console.error('Google ID token verification failed:', error);
+    res.status(401).json({ error: 'Invalid or expired Google Authentication token' });
+  }
 });
 
 // ─── RAZORPAY PAYMENT ENDPOINTS ───────────────────────────────────────────────

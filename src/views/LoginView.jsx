@@ -152,28 +152,18 @@ export const LoginView = () => {
     setError('');
     setIsLoading(true);
     try {
-      const mockName = selectedRole === 'admin' ? 'Abhishek Admin' : 'Google Customer';
-      const mockEmail = selectedRole === 'admin' ? 'anandabhishek24365@gmail.com' : 'googlecustomer@desicart.com';
-      
-      const response = await fetch('/api/auth/register', {
+      const userCredential = await signInWithPopup(auth, googleProvider);
+      const idToken = await userCredential.user.getIdToken();
+
+      const response = await fetch('/api/auth/google', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: mockName, email: mockEmail, password: 'google_oauth_bypass_secure', role: selectedRole })
-      }).catch(() => null);
+        body: JSON.stringify({ idToken, role: selectedRole })
+      });
 
-      let data;
-      if (!response || !response.ok) {
-        const loginResponse = await fetch('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: mockEmail, password: 'google_oauth_bypass_secure', role: selectedRole })
-        });
-        data = await loginResponse.json();
-        if (!loginResponse.ok) {
-          throw new Error(data.error || 'Google login failed');
-        }
-      } else {
-        data = await response.json();
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Google login verification failed');
       }
 
       localStorage.setItem('desicart_token', data.token);
@@ -181,7 +171,11 @@ export const LoginView = () => {
       if (data.user.email === 'anandabhishek24365@gmail.com') role = 'superadmin';
       handleSuccess(data.user, data.user.name, role);
     } catch (err) {
-      setError(err.message);
+      if (err.code === 'auth/popup-closed-by-user') {
+        setError('Sign-in cancelled. Please try again.');
+      } else {
+        setError(friendlyError(err.code) || err.message);
+      }
       setIsLoading(false);
     }
   };

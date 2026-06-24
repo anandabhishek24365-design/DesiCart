@@ -208,6 +208,30 @@ export const AppProvider = ({ children }) => {
     }
   };
 
+  const parseJwt = (token) => {
+    try {
+      return JSON.parse(atob(token.split('.')[1]));
+    } catch (e) {
+      return null;
+    }
+  };
+
+  useEffect(() => {
+    const token = localStorage.getItem('desicart_token');
+    if (token) {
+      const decoded = parseJwt(token);
+      if (decoded && decoded.email) {
+        setFirebaseUser({
+          email: decoded.email,
+          displayName: decoded.name || decoded.email.split('@')[0],
+          uid: decoded.email
+        });
+        setActiveRole(decoded.role || 'customer');
+        setIsLoggedIn(true);
+      }
+    }
+  }, []);
+
   const fetchOrders = async () => {
     const token = localStorage.getItem('desicart_token');
     if (!token) return;
@@ -848,20 +872,25 @@ export const AppProvider = ({ children }) => {
     setActiveRole(role);
     setIsLoggedIn(true);
 
-    let name = 'User';
-    if (role === 'customer') {
-      name = identifier || 'Jane Doe (Customer)';
-    } else if (role === 'vendor') {
-      name = identifier || 'Store Partner';
-    } else if (role === 'delivery') {
-      name = identifier || 'Delivery Partner';
-    } else if (role === 'admin') {
-      name = identifier || 'System Administrator';
-    } else if (role === 'superadmin') {
-      name = identifier || 'Super Admin';
+    const token = localStorage.getItem('desicart_token');
+    let email = `${role}@desicart.com`;
+    let displayName = identifier || 'User';
+
+    if (token) {
+      const decoded = parseJwt(token);
+      if (decoded && decoded.email) {
+        email = decoded.email;
+        if (decoded.name) displayName = decoded.name;
+      }
     }
 
-    showToast(`Welcome back! Logged in as ${name}.`, 'success');
+    setFirebaseUser({
+      email: email,
+      displayName: displayName,
+      uid: email
+    });
+
+    showToast(`Welcome back! Logged in as ${displayName}.`, 'success');
   };
 
   const logout = async () => {
@@ -874,6 +903,7 @@ export const AppProvider = ({ children }) => {
     }
     setIsLoggedIn(false);
     setFirebaseUser(null);
+    localStorage.removeItem('desicart_token');
     showToast('Logged out successfully.', 'info');
   };
 
