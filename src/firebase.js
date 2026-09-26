@@ -1,17 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
-  getAuth,
-  GoogleAuthProvider,
-  signInWithPopup,
-  signInWithRedirect,
-  getRedirectResult,
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  sendPasswordResetEmail,
-  updateProfile,
-  signOut
-} from 'firebase/auth';
-import {
   getFirestore,
   collection,
   doc,
@@ -33,7 +21,7 @@ import {
   update
 } from 'firebase/database';
 
-// DesiCart Firebase Project Configuration
+// DesiCart Firebase Project Configuration (Database & Realtime Services)
 const firebaseConfig = {
   apiKey: "AIzaSyDddyeOQBBr5fEP0YCSpwrV5lzmuAl5aHA",
   authDomain: "desicart-a15cd.firebaseapp.com",
@@ -48,38 +36,19 @@ const firebaseConfig = {
 // Initialize Firebase (guard against double-init in HMR)
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-// Firebase Auth instance
-const auth = getAuth(app);
-auth.languageCode = 'en';
-
 // Firestore database instance
 const db = getFirestore(app);
 
 // Realtime Database instance
 const rtdb = getDatabase(app);
 
-// Google Auth Provider
-const googleProvider = new GoogleAuthProvider();
-googleProvider.setCustomParameters({ prompt: 'select_account' });
-
 const isFirebaseEnabled = false;
 
 export {
   app,
-  auth,
   db,
   rtdb,
-  googleProvider,
   isFirebaseEnabled,
-  GoogleAuthProvider,
-  signInWithPopup,
-  signInWithRedirect,
-  getRedirectResult,
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  sendPasswordResetEmail,
-  updateProfile,
-  signOut,
   // Firestore helpers
   collection,
   doc,

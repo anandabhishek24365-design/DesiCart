@@ -6,12 +6,11 @@ import {
   INITIAL_COUPONS,
   INITIAL_DELIVERY_PARTNERS
 } from '../data/initialData';
+import { supabase } from '../lib/supabase';
 import {
-  auth, db, isFirebaseEnabled,
-  collection, doc, setDoc, updateDoc, deleteDoc, getDocs, onSnapshot, query, orderBy, serverTimestamp,
-  updateProfile
+  db, isFirebaseEnabled,
+  collection, doc, setDoc, updateDoc, deleteDoc, getDocs, onSnapshot, query, orderBy, serverTimestamp
 } from '../firebase';
-import { onAuthStateChanged } from 'firebase/auth';
 
 
 export const AppContext = createContext();
@@ -272,71 +271,82 @@ export const AppProvider = ({ children }) => {
   useEffect(() => { vendorsRef.current = vendors; }, [vendors]);
   useEffect(() => { deliveryPartnersRef.current = deliveryPartners; }, [deliveryPartners]);
 
-  // Listen to Firebase Auth state — registered only once using refs for stable data access
+  // Listen to Supabase Auth state changes & restore active user session
   useEffect(() => {
-    if (isFirebaseEnabled && auth) {
-      let isFirstLoad = true;
-      const unsubscribe = onAuthStateChanged(auth, (user) => {
-        if (user) {
-          setFirebaseUser(user);
-          setIsLoggedIn(true);
+    let isMounted = true;
 
-          const emailLower = user.email ? user.email.toLowerCase() : '';
+    const processSupabaseUser = (user) => {
+      if (!user) {
+        setFirebaseUser(null);
+        setIsLoggedIn(false);
+        return;
+      }
 
-          // Determine user role based on database records first
-          let role = null;
-          if (emailLower === 'anandabhishek24365@gmail.com') {
-            role = 'superadmin';
-          } else if (emailLower.endsWith('24365@gmail.com')) {
-            role = 'admin';
-          } else {
-            // Use refs so this listener never needs to re-register
-            const vendor = vendorsRef.current.find(
-              v => v.firebaseUid === user.uid || (user.email && v.email?.toLowerCase() === emailLower)
-            );
-            if (vendor) {
-              role = 'vendor';
-              if (!vendor.firebaseUid) {
-                vendor.firebaseUid = user.uid;
-                setVendors([...vendorsRef.current]);
-              }
-            } else {
-              const rider = deliveryPartnersRef.current.find(
-                d => d.firebaseUid === user.uid || (user.email && d.email?.toLowerCase() === emailLower)
-              );
-              if (rider) {
-                role = 'delivery';
-                if (!rider.firebaseUid) {
-                  rider.firebaseUid = user.uid;
-                  setDeliveryPartners([...deliveryPartnersRef.current]);
-                }
-              }
-            }
-          }
+      const email = user.email || '';
+      const emailLower = email.toLowerCase();
+      const metadata = user.user_metadata || {};
+      const displayName = metadata.full_name || metadata.name || metadata.custom_name || (email ? email.split('@')[0] : 'User');
+      const photoURL = metadata.avatar_url || metadata.picture || null;
 
-          // If no existing account role resolved, use the persisted role or default to customer
-          if (!role) {
-            role = localStorage.getItem('delivery_platform_role') || 'customer';
-          }
+      const userObj = {
+        email,
+        displayName,
+        photoURL,
+        uid: user.id
+      };
 
-          setActiveRole(role);
+      setFirebaseUser(userObj);
+      setIsLoggedIn(true);
 
-          if (isFirstLoad) {
-            isFirstLoad = false;
-          } else {
-            const name = user.displayName || user.email?.split('@')[0] || 'User';
-            showToast(`Welcome back! Logged in as ${name}.`, 'success');
-          }
+      // Determine user role based on database records first
+      let role = null;
+      if (emailLower === 'anandabhishek24365@gmail.com') {
+        role = 'superadmin';
+      } else if (emailLower.endsWith('24365@gmail.com')) {
+        role = 'admin';
+      } else {
+        const vendor = vendorsRef.current.find(
+          v => v.firebaseUid === user.id || (user.email && v.email?.toLowerCase() === emailLower)
+        );
+        if (vendor) {
+          role = 'vendor';
         } else {
-          setFirebaseUser(null);
-          setIsLoggedIn(false);
-          isFirstLoad = false;
+          const rider = deliveryPartnersRef.current.find(
+            d => d.firebaseUid === user.id || (user.email && d.email?.toLowerCase() === emailLower)
+          );
+          if (rider) {
+            role = 'delivery';
+          }
         }
-      });
-      return unsubscribe;
-    }
+      }
+
+      if (!role) {
+        role = localStorage.getItem('delivery_platform_role') || 'customer';
+      }
+
+      setActiveRole(role);
+    };
+
+    // 1. Initial Session Check
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (isMounted && session?.user) {
+        processSupabaseUser(session.user);
+      }
+    }).catch(err => console.error('Supabase getSession error:', err));
+
+    // 2. Auth State Change Listener
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (isMounted) {
+        processSupabaseUser(session?.user || null);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      subscription?.unsubscribe();
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // stable — uses refs for vendors/deliveryPartners
+  }, []);
 
   // ─── FIRESTORE REAL-TIME LISTENERS ──────────────────────────────────────────
   // These replace the localStorage seeds for key shared collections.
@@ -894,16 +904,15 @@ export const AppProvider = ({ children }) => {
   };
 
   const logout = async () => {
-    if (isFirebaseEnabled && auth) {
-      try {
-        await auth.signOut();
-      } catch (err) {
-        console.error('Firebase SignOut error:', err);
-      }
+    try {
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.error('Supabase SignOut error:', err);
     }
     setIsLoggedIn(false);
     setFirebaseUser(null);
     localStorage.removeItem('desicart_token');
+    localStorage.removeItem('desicart_pending_role');
     showToast('Logged out successfully.', 'info');
   };
 

@@ -1,16 +1,6 @@
 import React, { useContext, useState, useEffect } from 'react';
 import { AppContext } from '../context/AppContext';
-import {
-  auth,
-  googleProvider,
-  signInWithPopup,
-  signInWithRedirect,
-  getRedirectResult,
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  sendPasswordResetEmail,
-  updateProfile
-} from '../firebase';
+import { supabase } from '../lib/supabase';
 import {
   Mail, Lock, Eye, EyeOff, User, Store, Bike, ShieldCheck,
   LogIn, UserPlus, AlertCircle, CheckCircle2, RefreshCw, ArrowLeft,
@@ -73,48 +63,6 @@ export const LoginView = () => {
 
   useEffect(() => { setError(''); setStep('form'); }, [tab, selectedRole]);
 
-  useEffect(() => {
-    // Check if user returned from Google Redirect sign-in
-    getRedirectResult(auth).then(async (userCredential) => {
-      if (userCredential && userCredential.user) {
-        setIsLoading(true);
-        const gUser = userCredential.user;
-        const pendingRole = localStorage.getItem('desicart_pending_role') || 'customer';
-        
-        let role = pendingRole;
-        if (gUser.email?.toLowerCase() === 'anandabhishek24365@gmail.com') role = 'superadmin';
-
-        try {
-          const idToken = await gUser.getIdToken();
-          const response = await fetch('/api/auth/google', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ idToken, role: pendingRole })
-          });
-          if (response.ok) {
-            const data = await response.json();
-            localStorage.setItem('desicart_token', data.token);
-            if (data.user.email === 'anandabhishek24365@gmail.com') role = 'superadmin';
-            handleSuccess(data.user, data.user.name, role);
-            return;
-          }
-        } catch (apiErr) {
-          console.warn('Backend auth endpoint unavailable, proceeding with Google Auth:', apiErr);
-        }
-
-        // Direct client-side Google Auth fallback (works on Vercel and offline backend)
-        const userObj = { name: gUser.displayName || gUser.email.split('@')[0], email: gUser.email, role };
-        handleSuccess(userObj, userObj.name, role);
-      }
-    }).catch(err => {
-      if (err.code !== 'auth/popup-closed-by-user') {
-        console.error('Redirect sign in error:', err);
-      }
-    }).finally(() => {
-      setIsLoading(false);
-    });
-  }, []);
-
   const activeRole = ROLES.find(r => r.id === selectedRole);
   const GREEN = '#16a34a';
 
@@ -128,9 +76,6 @@ export const LoginView = () => {
       case 'auth/weak-password':          return 'Password must be at least 6 characters.';
       case 'auth/invalid-email':          return 'Please enter a valid email address.';
       case 'auth/too-many-requests':      return 'Too many attempts. Please wait a few minutes.';
-      case 'auth/popup-closed-by-user':   return 'Sign-in window closed. Please try again.';
-      case 'auth/popup-blocked':          return 'Pop-up blocked by browser. Retrying with redirect...';
-      case 'auth/cancelled-popup-request': return '';
       case 'auth/network-request-failed': return 'Network error. Check your internet connection.';
       default:                            return null;
     }
@@ -205,56 +150,26 @@ export const LoginView = () => {
     setIsLoading(false);
   };
 
-  /* ─── Google Sign-In ─── */
+  /* ─── Supabase Google OAuth Sign-In ─── */
   const handleGoogleSignIn = async () => {
     setError('');
     setIsLoading(true);
     localStorage.setItem('desicart_pending_role', selectedRole);
+
     try {
-      let userCredential;
-      try {
-        userCredential = await signInWithPopup(auth, googleProvider);
-      } catch (popupErr) {
-        if (popupErr.code === 'auth/popup-blocked' || popupErr.code === 'auth/cancelled-popup-request') {
-          console.warn('Popup blocked, attempting redirect sign-in...');
-          await signInWithRedirect(auth, googleProvider);
-          return;
+      const { error: supabaseError } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: window.location.origin
         }
-        throw popupErr;
+      });
+
+      if (supabaseError) {
+        throw supabaseError;
       }
-
-      const gUser = userCredential.user;
-      let role = selectedRole;
-      if (gUser.email?.toLowerCase() === 'anandabhishek24365@gmail.com') role = 'superadmin';
-
-      try {
-        const idToken = await gUser.getIdToken();
-        const response = await fetch('/api/auth/google', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ idToken, role: selectedRole })
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          localStorage.setItem('desicart_token', data.token);
-          if (data.user.email === 'anandabhishek24365@gmail.com') role = 'superadmin';
-          handleSuccess(data.user, data.user.name, role);
-          return;
-        }
-      } catch (apiErr) {
-        console.warn('Backend auth endpoint unavailable, proceeding with Google Auth:', apiErr);
-      }
-
-      // Direct client-side Google Auth fallback (works on Vercel and offline backend)
-      const userObj = { name: gUser.displayName || gUser.email.split('@')[0], email: gUser.email, role };
-      handleSuccess(userObj, userObj.name, role);
     } catch (err) {
-      if (err.code === 'auth/popup-closed-by-user') {
-        setError('Sign-in cancelled. Please try again.');
-      } else {
-        setError(friendlyError(err.code) || err.message || 'Something went wrong. Please try again.');
-      }
+      console.error('Supabase Google OAuth error:', err);
+      setError(err.message || 'Google Sign-In failed. Please try again.');
       setIsLoading(false);
     }
   };
