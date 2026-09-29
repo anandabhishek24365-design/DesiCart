@@ -169,13 +169,6 @@ export const LoginView = () => {
       }
     } catch (err) {
       console.error('Supabase Google OAuth error:', err);
-      // Seamless fallback if Google provider is not enabled in Supabase Dashboard yet
-      if (err.message?.includes('validation_failed') || err.message?.includes('provider') || err.message?.includes('disabled')) {
-        const fallbackUser = { email: 'customer@google.com', name: 'Google Account' };
-        let role = selectedRole;
-        handleSuccess(fallbackUser, fallbackUser.name, role);
-        return;
-      }
       setError(err.message || 'Google Sign-In failed. Please try again.');
       setIsLoading(false);
     }
