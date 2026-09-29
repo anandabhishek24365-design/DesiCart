@@ -506,7 +506,7 @@ export const LoginView = () => {
                   color: '#1a2e1a',
                   boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
                   transition: 'all 0.2s ease',
-                  marginBottom: '1rem',
+                  marginBottom: '0.5rem',
                   opacity: isLoading ? 0.7 : 1
                 }}
                 onMouseEnter={e => { if (!isLoading) { e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,0,0,0.10)'; e.currentTarget.style.borderColor = '#d1d5db'; } }}
@@ -514,6 +514,28 @@ export const LoginView = () => {
               >
                 <GoogleIcon />
                 Continue with Google
+              </button>
+
+              {/* Quick Demo Sign-In Button */}
+              <button type="button" onClick={() => {
+                const demoUser = { email: 'anandabhishek24365@gmail.com', name: 'Abhishek Anand' };
+                handleSuccess(demoUser, demoUser.name, selectedRole === 'admin' ? 'superadmin' : selectedRole);
+              }}
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'center',
+                  justifyContent: 'center', gap: '0.5rem',
+                  padding: '0.55rem 1rem',
+                  border: '1px dashed #16a34a',
+                  borderRadius: '10px',
+                  background: '#f0fdf4',
+                  cursor: 'pointer',
+                  fontSize: '0.78rem', fontWeight: 700,
+                  color: '#15803d',
+                  transition: 'all 0.2s ease',
+                  marginBottom: '1rem'
+                }}
+              >
+                ⚡ Instant Demo Login ({selectedRole})
               </button>
 
               {/* Divider */}
